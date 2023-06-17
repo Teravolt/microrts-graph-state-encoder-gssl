@@ -1,0 +1,18 @@
+[MASTER]
+
+jobs=0
+persistent=yes
+
+[REPORTS]
+
+output-format=text
+
+[BASIC]
+
+# i, j, k are frequently used to denote list indices
+# f is frequently used to denote a file pointer 
+good-names=i, j, k, f, ax, fp
+
+[DESIGN]
+max-locals=30
+min-public-methods=1
