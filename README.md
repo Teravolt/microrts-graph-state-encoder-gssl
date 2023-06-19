@@ -1,29 +1,28 @@
 # Microrts Analyzer
 
-Python code to parse replay data generated from the Real-Time Strategy AI testbed MicroRTS.
+Python code to analyze replay data generated from the Real-Time Strategy AI testbed MicroRTS.
 
 ## Requirements
 
-Please note that the replay parser has been tested on MacOS.
+Please note that the analyzer has been tested on MacOS.
 I believe this will work on Linux, but I am not 100% sure.
-Below lists all Python packages for setting up the microrts replay parser.
-You will need `Python 3.9`+ to use the replay parser.
+Below lists all Python packages for setting up the analyzer.
+You will need `Python 3.9`+ to use the analyzer.
 
-- (REQUIRED) `numpy` (can be installed via `pip install numpy`)
-- (REQUIRED) `tqdm` (can be installed via `pip install tqdm`)
-- torch = "^2.0.1"
-torchvision = "^0.15.2"
-numpy = "^1.25.0"
-pandas = "^2.0.2"
-seaborn = "^0.12.2"
-gradio = "^3.35.2"
-jupyterlab = "^4.0.2"
-tqdm = "^4.65.0"
-- (OPTIONAL) `pylint` (Can be installved via `pip install pylint`) - This does not need to be installed unless you are contributing to the project.
+- `numpy` (can be installed via `pip install numpy`)
+- `pandas` (can be installed via `pip install pandas`)
+- `seaborn` (can be installed via `pip install seaborn`)
+- `tqdm` (can be installed via `pip install tqdm`)
+- `torch` (can be installed via `pip install torch`)
+- `torchvision` (can be installed via `pip install torchvision`)
+- `gradio` (can be installed via `pip install gradio`)
+- `jupyterlab` (can be installed via `pip install jupyterlab`)
+- `pylint` (Can be installved via `pip install pylint`) - This does not need to be installed unless you are contributing to the project.
 
 ## Environment Setup
 
-We use `poetry` to set up our Python environment as it provides an easy and quick way to setup, update, and tear down python virtual environments. Please see the [Pipenv Documentation](https://pipenv-fork.readthedocs.io/en/latest/) for instructions on how to both install it on your preferred OS and use it.
+We use `poetry` to set up our Python environment as it provides an easy and quick way to setup, update, and tear down python virtual environments.
+Please see the [Poetry Documentation](https://python-poetry.org/) for instructions on how to both install it on your preferred OS and use it.
 
 If you prefer to use other methods to set up an environment, please make sure that the Python packages and version in the "Requirements" section are installed!
 
