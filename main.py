@@ -25,9 +25,11 @@ def get_config():
                         help='Allow coordinates in states and actions')
     parser.add_argument('--unit_actions_to_ignore', type=list, default=[],
                         help='Unit actions to ignore')
-    parser.add_argument('--max_replays', default=-1,
+    parser.add_argument('--max_replays', default=-1, type=int,
                         help='Maximum number of replays to read')
-    parser.add_argument('--seed', default=1, help='Random seed')
+    parser.add_argument('--max_replay_length', default=-1, type=int,
+                        help='Maximum replay length')
+    parser.add_argument('--seed', default=1, type=int, help='Random seed')
 
     config = parser.parse_args()
 
