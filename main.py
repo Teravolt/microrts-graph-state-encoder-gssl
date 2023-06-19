@@ -2,10 +2,7 @@
 Example usage of microrts replay parser
 """
 
-import json
 import argparse
-
-import numpy
 
 from replay_parser.parser import parse_replay_dataset
 

@@ -2,6 +2,8 @@
 
 jobs=0
 persistent=yes
+logging-format-style=new
+disable=logging-fstring-interpolation
 
 [REPORTS]
 

@@ -23,7 +23,7 @@ NUM_PLAYER_FEATURES = 14
 NUM_GAME_FEATURES = 2
 NUM_STATE_FEATURES = NUM_PLAYER_FEATURES + NUM_GAME_FEATURES
 
-def build_simple_feature_vector_state(height, width, unit_data_map):
+def build_simple_feature_vector_state(unit_data_map: dict):
     """
     Construct a simple state representation (vector of features)
 
@@ -39,10 +39,7 @@ def build_simple_feature_vector_state(height, width, unit_data_map):
     :param width: Width of game map
     :param unit_data_map: Information about each unit in the game state
 
-    :returns: 
-      player_0_features (np.array): Player-specific features for player 1
-      player_1_features (np.array): Player-specific features for player 2
-      game_features (np.array): Game features
+    :returns: State features
     """
 
     ordered_unit_types = [
@@ -61,14 +58,7 @@ def build_simple_feature_vector_state(height, width, unit_data_map):
             if player_id not in players:
                 players.append(player_id)
 
-    # print(f"Number of players: {players}")
-
     state_features = np.zeros((len(players)+1, NUM_PLAYER_FEATURES))
-
-    # player_0_features = np.zeros((NUM_PLAYER_FEATURES, 1))
-    # player_1_features = np.zeros((NUM_PLAYER_FEATURES, 1))
-    # game_features = np.zeros((NUM_GAME_FEATURES, 1))
-    # player_id_to_features = {0 : player_0_features, 1 : player_1_features}
 
     for _, unit_data in unit_data_map.items():
         unit_type = unit_data['type'].lower()
@@ -82,9 +72,9 @@ def build_simple_feature_vector_state(height, width, unit_data_map):
         state_features[player][index] += 1
         state_features[player][index + 6] += float(unit_data['hitpoints'])
 
-        if unit_type == "worker":
+        if unit_type == 'worker':
             state_features[player][12] += float(unit_data['resources'])
-        elif unit_type == "base":
+        elif unit_type == 'base':
             state_features[player][13] += float(unit_data['resources'])
         else:
             continue

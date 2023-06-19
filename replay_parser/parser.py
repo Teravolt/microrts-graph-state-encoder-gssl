@@ -3,7 +3,7 @@ Parse replay data and construct sequence of state-action pairs
 """
 
 import argparse
-import xml.etree.ElementTree as ElementTree
+from xml.etree import ElementTree
 from zipfile import ZipFile
 
 import os
@@ -17,7 +17,7 @@ from replay_parser.state import build_simple_feature_vector_state
 
 from replay_parser.utils.log_utils import LoggingUtils
 
-def __add_state_action(state: np.array, 
+def __add_state_action(state: np.array,
                        pid_to_action: dict,
                        player_to_trace: dict):
     """
@@ -73,8 +73,8 @@ def parse_replay_xml(filename: str, config: dict):
 
     for trace_entry in root.find('entries'):
         physical_game_state_entry = trace_entry.find('rts.PhysicalGameState')
-        width = int(physical_game_state_entry.attrib['width'])
-        height = int(physical_game_state_entry.attrib['height'])
+        # width = int(physical_game_state_entry.attrib['width'])
+        # height = int(physical_game_state_entry.attrib['height'])
 
         # arena_map_str = physical_game_state_entry.find("terrain").text
 
@@ -83,11 +83,11 @@ def parse_replay_xml(filename: str, config: dict):
             if entry.attrib['ID'] not in player_ids and entry.attrib['ID'] != '-1':
                 player_ids.append(int(entry.attrib['ID']))
 
-        unit_data_map = dict()
+        unit_data_map = {}
         for unit in physical_game_state_entry.find('units'):
             unit_data_map[unit.attrib['ID']] = unit.attrib
 
-        state = build_simple_feature_vector_state(height, width, unit_data_map)
+        state = build_simple_feature_vector_state(unit_data_map)
 
         pid_to_action = create_unit_actions(
             trace_entry, unit_data_map,
