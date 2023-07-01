@@ -13,7 +13,8 @@ import numpy as np
 from tqdm import tqdm
 
 from replay_parser.action import create_unit_actions
-from replay_parser.state import build_simple_feature_vector_state
+from replay_parser.state import build_simple_feature_vector_state, \
+    build_image_state
 
 from replay_parser.utils.log_utils import LoggingUtils
 
@@ -73,10 +74,10 @@ def parse_replay_xml(filename: str, config: dict):
 
     for trace_entry in root.find('entries'):
         physical_game_state_entry = trace_entry.find('rts.PhysicalGameState')
-        # width = int(physical_game_state_entry.attrib['width'])
-        # height = int(physical_game_state_entry.attrib['height'])
+        width = int(physical_game_state_entry.attrib['width'])
+        height = int(physical_game_state_entry.attrib['height'])
 
-        # arena_map_str = physical_game_state_entry.find("terrain").text
+        arena_map_str = physical_game_state_entry.find("terrain").text
 
         players_entry = physical_game_state_entry.find('players')
         for entry in players_entry:
@@ -87,12 +88,13 @@ def parse_replay_xml(filename: str, config: dict):
         for unit in physical_game_state_entry.find('units'):
             unit_data_map[unit.attrib['ID']] = unit.attrib
 
-        state = build_simple_feature_vector_state(unit_data_map)
-
         pid_to_action = create_unit_actions(
             trace_entry, unit_data_map,
             unit_actions_to_ignore,
             allow_coordinates=allow_coordinates)
+
+        state = build_image_state(height, width, arena_map_str, unit_data_map)
+        # state = build_simple_feature_vector_state(unit_data_map)
 
         __add_state_action(state,
                            pid_to_action,

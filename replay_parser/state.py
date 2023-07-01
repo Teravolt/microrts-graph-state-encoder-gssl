@@ -4,6 +4,9 @@ State representation for MicroRTS
 
 import numpy as np
 
+import torch
+from torch import nn
+
 UNIT_TYPE_TO_COLOR = {
     "worker": (128, 128, 128, 1.0),
     "base": (255, 255, 255, 1.0),
@@ -22,6 +25,11 @@ PLAYER_TO_COLOR = {
 NUM_PLAYER_FEATURES = 14
 NUM_GAME_FEATURES = 2
 NUM_STATE_FEATURES = NUM_PLAYER_FEATURES + NUM_GAME_FEATURES
+
+SCALE_FACTOR = 8
+UPSAMPLER = nn.Upsample(
+    scale_factor=SCALE_FACTOR,
+    mode='nearest')
 
 def build_simple_feature_vector_state(unit_data_map: dict):
     """
@@ -82,45 +90,93 @@ def build_simple_feature_vector_state(unit_data_map: dict):
     return state_features
 
 
-def build_image_state(height, width, arena_map_as_str, unit_data_map):
+def upsample_state(state):
+    """
+    Upsample state
+    """
+
+    upsampled_state = torch.tensor(state)
+    upsampled_state = upsampled_state.transpose(0, 2).unsqueeze(0)
+    upsampled_state = UPSAMPLER(upsampled_state).squeeze(0)
+    upsampled_state = upsampled_state.transpose(0, 2)
+
+    upsampled_state = upsampled_state.numpy()
+
+    return upsampled_state
+
+
+def build_image_state(height: int, width: int,
+                      arena_map_str,
+                      unit_data_map):
     """
     Construct image representation of a state
 
-    Args:
-        height (int): Height of the game map
-        width (int): Width of the game map
-        arena_map_as_str (str): Game map in string representation
-        unit_data_map (dict[str, obj]): Unit information
+    :param height: Height of the game map
+    :param width: Width of the game map
+    :param arena_map_str: Game map in string representation
+    :param unit_data_map: Unit information
 
-    Returns: ?
+    :returns: State features as images
     """
 
-    map_rows = list()
+    players = []
+
+    for _, unit_data in unit_data_map.items():
+        player_id = int(unit_data['player'])
+        if player_id != -1:
+            if player_id not in players:
+                players.append(player_id)
+
+    game_map = np.zeros((height, width, 3))
+
     total_num_tiles = width*height
     i = 0
+
     while i < total_num_tiles:
-        row_str = arena_map_as_str[i:i+width]
-        row = list()
-        for j in range(0, len(row_str)):
-            if row_str[j] != "1":
-                row.append([0, 0, 0]) # r, g, b
+        row_str = arena_map_str[i:i+width]
+
+        for j, elem in enumerate(row_str):
+            if elem != '1':
+                game_map[i // width, j, :] = 0
+                # row.append([0, 0, 0]) # r, g, b
             else:
-                row.append([1, 1, 1])
-        map_rows.append(row)
+                game_map[i // width, j, :] = 1
+                # row.append([1, 1, 1])
+
         i += width
-    game_map = np.array(map_rows)  # (height, width, 3)
-    player_map = np.array(map_rows)
-    # print(game_map.shape, player_map.shape)
+
+    state_features = np.stack([np.array(game_map)]*(len(players)+1))
+
     for _, unit_data in unit_data_map.items():
         x = int(unit_data['x'])
         y = int(unit_data['y'])
-        unit_type = unit_data["type"].lower()
-        game_map[y, x, 0] = self.unit_type_to_color[unit_type][0]
-        game_map[y, x, 1] = self.unit_type_to_color[unit_type][1]
-        game_map[y, x, 2] = self.unit_type_to_color[unit_type][2]
-        if unit_data["player"] != "-1":
-            player_type = "player" if unit_data["player"] == player_id else "enemy"
-            player_map[y, x, 0] = self.player_to_color[player_type][0]
-            player_map[y, x, 1] = self.player_to_color[player_type][1]
-            player_map[y, x, 2] = self.player_to_color[player_type][2]
-    return (game_map, player_1_map, player_2_map)
+
+        unit_type = unit_data['type'].lower()
+
+        state_features[-1, y, x, 0] = UNIT_TYPE_TO_COLOR[unit_type][0]
+        state_features[-1, y, x, 1] = UNIT_TYPE_TO_COLOR[unit_type][1]
+        state_features[-1, y, x, 2] = UNIT_TYPE_TO_COLOR[unit_type][2]
+
+        if unit_data['player'] != '-1':
+            player_id = int(unit_data['player'])
+
+            state_features[player_id, y, x, 0] = PLAYER_TO_COLOR['player'][0]
+            state_features[player_id, y, x, 1] = PLAYER_TO_COLOR['player'][1]
+            state_features[player_id, y, x, 2] = PLAYER_TO_COLOR['player'][2]
+
+            for pid in players:
+                if pid != player_id:
+                    state_features[pid, y, x, 0] = PLAYER_TO_COLOR['enemy'][0]
+                    state_features[pid, y, x, 1] = PLAYER_TO_COLOR['enemy'][1]
+                    state_features[pid, y, x, 2] = PLAYER_TO_COLOR['enemy'][2]
+
+    upsampled_game_state = upsample_state(state_features[-1])
+
+    player_states = []
+    for pid in players:
+        upsampled_state = upsample_state(state_features[pid])
+        player_states.append(upsampled_state)
+
+    state = np.stack(player_states + [upsampled_game_state], axis=0)
+
+    return state
