@@ -6,6 +6,8 @@ import argparse
 from xml.etree import ElementTree
 from zipfile import ZipFile
 
+from copy import deepcopy
+
 import os
 
 import numpy as np
@@ -14,13 +16,14 @@ from tqdm import tqdm
 
 from replay_parser.action import create_unit_actions
 from replay_parser.state import build_simple_feature_vector_state, \
-    build_image_state
+    build_image_state, build_graph_state
 
 from replay_parser.utils.log_utils import LoggingUtils
 
-def __add_state_action(state: np.array,
+def __add_state_action(state,
                        pid_to_action: dict,
-                       player_to_trace: dict):
+                       player_to_trace: dict,
+                       is_graph=False):
     """
     Help add state-action pair to state-action traces
 
@@ -29,14 +32,28 @@ def __add_state_action(state: np.array,
     :param player_to_trace: Player id to state-action trace
     """
 
-    for i in range(state.shape[0]-1):
-        if i not in player_to_trace:
-            player_to_trace[i] = []
+    if is_graph:
+        # Graph data structure will have list of players in it
+        for i in range(len(state.players)):
+            if i not in player_to_trace:
+                player_to_trace[i] = []
 
-        action = None if i not in pid_to_action else pid_to_action[i]
+            player_state = deepcopy(state)
+            for j, label in enumerate(player_state.labels):
+                if i == label:
+                    player_state.x[j, -1] = 1
 
-        player_state = np.stack([state[i], state[-1]], axis=0)
-        player_to_trace[i].append((player_state, action))
+            action = None if i not in pid_to_action else pid_to_action[i]
+            player_to_trace[i].append((player_state, action))
+    else:
+        for i in range(state.shape[0]-1):
+            if i not in player_to_trace:
+                player_to_trace[i] = []
+
+            action = None if i not in pid_to_action else pid_to_action[i]
+
+            player_state = np.stack([state[i], state[-1]], axis=0)
+            player_to_trace[i].append((player_state, action))
 
 
 def parse_replay_xml(filename: str, config: dict):
@@ -52,6 +69,7 @@ def parse_replay_xml(filename: str, config: dict):
     read_from_zip = config.read_from_zip
     allow_coordinates = config.allow_coordinate
     unit_actions_to_ignore = config.unit_actions_to_ignore
+    max_replay_length = config.max_replay_length
 
     player_to_trace = {}
     player_ids = []
@@ -72,7 +90,11 @@ def parse_replay_xml(filename: str, config: dict):
     # player_action_data['type_list'] = {}
     # player_action_data['duplicate_index'] = 0
 
-    for trace_entry in root.find('entries'):
+    for i, trace_entry in enumerate(root.find('entries')):
+
+        if max_replay_length != -1 and max_replay_length == i:
+            break
+
         physical_game_state_entry = trace_entry.find('rts.PhysicalGameState')
         width = int(physical_game_state_entry.attrib['width'])
         height = int(physical_game_state_entry.attrib['height'])
@@ -82,7 +104,8 @@ def parse_replay_xml(filename: str, config: dict):
         players_entry = physical_game_state_entry.find('players')
         for entry in players_entry:
             if entry.attrib['ID'] not in player_ids and entry.attrib['ID'] != '-1':
-                player_ids.append(int(entry.attrib['ID']))
+                if int(entry.attrib['ID']) not in player_ids:
+                    player_ids.append(int(entry.attrib['ID']))
 
         unit_data_map = {}
         for unit in physical_game_state_entry.find('units'):
@@ -93,12 +116,14 @@ def parse_replay_xml(filename: str, config: dict):
             unit_actions_to_ignore,
             allow_coordinates=allow_coordinates)
 
-        state = build_image_state(height, width, arena_map_str, unit_data_map)
+        state = build_graph_state(unit_data_map)
+        # state = build_image_state(height, width, arena_map_str, unit_data_map)
         # state = build_simple_feature_vector_state(unit_data_map)
 
         __add_state_action(state,
                            pid_to_action,
-                           player_to_trace)
+                           player_to_trace,
+                           is_graph=True)
 
     player_to_trace = [
         (pid, player_to_trace[pid]) for pid in player_ids]
@@ -130,38 +155,10 @@ def __parse_replay_dataset(replay_dataset: list, config: argparse.Namespace):
         file_path = f"{config.input_directory}/{filename}"
         player_to_trace = parse_replay_xml(file_path, config)
 
-        replay_data.append(
-            (player_to_trace, fname_extension_removed))
+        for pid, trace in player_to_trace:
+            replay_data.append((fname_extension_removed, pid, trace))
 
     return replay_data
-
-def __refine_replay_data(replay_data, config: argparse.Namespace):
-    """
-    Help refine replay data dataset
-
-    :param replay_data: Replay data
-    :param config: Config data
-
-    :returns: Refined replay data
-    """
-
-    LoggingUtils.microrts_parser_logger.info("Refining replay data...")
-
-    refined_traces = []
-
-    max_replay_length = config.max_replay_length
-    LoggingUtils.microrts_parser_logger.info(
-        f"Truncating state-action pairs to {max_replay_length}")
-
-    for data in replay_data:
-        trace, filename = data
-        for pid, trace in trace:
-            if max_replay_length > 0:
-                _max_replay_length = min(max_replay_length, len(trace))
-                trace = trace[0:_max_replay_length]
-            refined_traces.append((filename, pid, trace))
-
-    return refined_traces
 
 def parse_replay_dataset(config: argparse.Namespace):
     """
@@ -198,6 +195,5 @@ def parse_replay_dataset(config: argparse.Namespace):
     replay_dataset = replay_dataset[0:max_replays]
 
     replay_data = __parse_replay_dataset(replay_dataset, config)
-    replay_data = __refine_replay_data(replay_data, config)
 
     return replay_data

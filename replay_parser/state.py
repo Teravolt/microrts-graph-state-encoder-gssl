@@ -4,8 +4,12 @@ State representation for MicroRTS
 
 import numpy as np
 
+from scipy.spatial.distance import euclidean
+
 import torch
 from torch import nn
+
+from torch_geometric.data import Data
 
 UNIT_TYPE_TO_COLOR = {
     "worker": (128, 128, 128, 1.0),
@@ -16,6 +20,8 @@ UNIT_TYPE_TO_COLOR = {
     "ranged": (0, 255, 255, 1.0),
     "resource": (0, 255, 0, 1.0)
     }
+
+UNIT_TYPES = list(UNIT_TYPE_TO_COLOR.keys())
 
 PLAYER_TO_COLOR = {
     "player": (0, 0, 255, 1.0),
@@ -89,6 +95,68 @@ def build_simple_feature_vector_state(unit_data_map: dict):
 
     return state_features
 
+def build_graph_state(unit_data_map):
+    """
+    Construct a graph-representation of a state
+
+    :param unit_data_map: Unit information
+    """
+
+    # Considering a fully-connected graph
+    # Node are entities and resources on the map
+    # Edges are distance relationship between each
+    # entity/resource
+
+    num_nodes = len(unit_data_map)
+    num_edges = len(unit_data_map)*len(unit_data_map)
+
+    players = []
+
+    for _, unit_data in unit_data_map.items():
+        player_id = int(unit_data['player'])
+        if player_id != -1:
+            if player_id not in players:
+                players.append(player_id)
+
+    labels = []
+    num_features = len(UNIT_TYPES) + 3
+    node_features = np.zeros((num_nodes, num_features))
+
+    edge_index = np.zeros((2, num_edges))
+    edge_attr = np.zeros((num_edges, 1))
+
+    edge_idx = 0
+    for i, (_, unit_data) in enumerate(unit_data_map.items()):
+        unit_type = unit_data['type'].lower()
+
+        player_id = int(unit_data['player'])
+        # print(f"Unit data: {unit_data}")
+
+        node_features[i, UNIT_TYPES.index(unit_type)] = 1
+        node_features[i, len(UNIT_TYPES)] = float(unit_data['resources'])
+        node_features[i, len(UNIT_TYPES)+1] = float(unit_data['hitpoints'])
+        labels.append(player_id)
+
+        # if player_id != -1:
+        #     node_features[i, len(UNIT_TYPES)+ 2 + players.index(player_id)] = 1
+        # else:
+        #     node_features[i, -2] = 1
+
+        unit_coord_1 = float(unit_data['x']), float(unit_data['y'])
+        for j, (_, unit_data) in enumerate(unit_data_map.items()):
+            unit_coord_2 = float(unit_data['x']), float(unit_data['y'])
+            edge_index[0][edge_idx] = i
+            edge_index[1][edge_idx] = j
+            edge_attr[edge_idx][0] = euclidean(unit_coord_1, unit_coord_2)
+            edge_idx += 1
+
+    graph = Data(x=torch.tensor(node_features, dtype=torch.float32),
+                 edge_index=torch.tensor(edge_index, dtype=torch.int32),
+                 edge_attr=torch.tensor(edge_attr, dtype=torch.float32),
+                 players=players,
+                 labels=labels)
+
+    return graph
 
 def upsample_state(state):
     """
@@ -169,13 +237,19 @@ def build_image_state(height: int, width: int,
                     state_features[pid, y, x, 0] = PLAYER_TO_COLOR['enemy'][0]
                     state_features[pid, y, x, 1] = PLAYER_TO_COLOR['enemy'][1]
                     state_features[pid, y, x, 2] = PLAYER_TO_COLOR['enemy'][2]
+        else:
+            for pid in players:
+                state_features[pid, y, x, 0] = UNIT_TYPE_TO_COLOR[unit_type][0]
+                state_features[pid, y, x, 1] = UNIT_TYPE_TO_COLOR[unit_type][1]
+                state_features[pid, y, x, 2] = UNIT_TYPE_TO_COLOR[unit_type][2]
 
-    upsampled_game_state = upsample_state(state_features[-1])
+    # upsampled_game_state = upsample_state(state_features[-1])
+    upsampled_game_state = state_features[-1]
 
     player_states = []
     for pid in players:
-        upsampled_state = upsample_state(state_features[pid])
-        player_states.append(upsampled_state)
+        # upsampled_state = upsample_state(state_features[pid])
+        player_states.append(state_features[pid])
 
     state = np.stack(player_states + [upsampled_game_state], axis=0)
 
