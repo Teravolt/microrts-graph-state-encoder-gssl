@@ -123,7 +123,7 @@ def build_graph_state(unit_data_map):
     node_features = np.zeros((num_nodes, num_features))
 
     edge_index = np.zeros((2, num_edges))
-    edge_attr = np.zeros((num_edges, 1))
+    edge_attr = np.zeros((num_edges, 2))
 
     edge_idx = 0
     for i, (_, unit_data) in enumerate(unit_data_map.items()):
@@ -144,14 +144,38 @@ def build_graph_state(unit_data_map):
 
         unit_coord_1 = float(unit_data['x']), float(unit_data['y'])
         for j, (_, unit_data) in enumerate(unit_data_map.items()):
+            if i == j:
+                # No self-loops
+                continue
+
             unit_coord_2 = float(unit_data['x']), float(unit_data['y'])
             edge_index[0][edge_idx] = i
             edge_index[1][edge_idx] = j
             edge_attr[edge_idx][0] = euclidean(unit_coord_1, unit_coord_2)
+
+            y_diff = unit_coord_2[1]-unit_coord_1[1]
+            x_diff = unit_coord_2[0]-unit_coord_1[0]
+            angle_rad = 0
+            if x_diff != 0:
+                angle_rad = np.arctan(y_diff/x_diff)
+            if y_diff > 0 and x_diff < 0:
+                # Quadrant 2
+                # print("Quadrant 2")
+                angle_rad = np.pi-angle_rad
+            elif y_diff < 0 and x_diff < 0:
+                # Quadrant 3
+                # print("Quadrant 3")
+                angle_rad = np.pi+angle_rad
+            elif y_diff < 0 and x_diff > 0:
+                # Quadrant 4
+                # print("Quadrant 4")
+                angle_rad = 2*np.pi-angle_rad
+
+            edge_attr[edge_idx][1] = angle_rad
             edge_idx += 1
 
     graph = Data(x=torch.tensor(node_features, dtype=torch.float32),
-                 edge_index=torch.tensor(edge_index, dtype=torch.int32),
+                 edge_index=torch.tensor(edge_index, dtype=torch.int64),
                  edge_attr=torch.tensor(edge_attr, dtype=torch.float32),
                  players=players,
                  labels=labels)
