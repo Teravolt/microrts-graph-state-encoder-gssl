@@ -19,6 +19,7 @@ torch-geometric = "^2.3.1"
 wandb = "^0.15.4"
 scipy = "^1.11.1"
 transformers = "^4.31.0"
+accelerate = "^1.1.0"
 
 
 [tool.poetry.group.dev.dependencies]

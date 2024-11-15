@@ -1,5 +1,5 @@
 """
-Example usage of microrts replay parser
+Train graph state encoder
 """
 
 import argparse
@@ -7,148 +7,139 @@ from argparse import Namespace
 
 from copy import deepcopy
 
-import numpy as np
 import wandb
 
 import torch
-import torch.optim as optim
-
-# from PIL import Image
-# from PIL import ImageOps
-
-from replay_parser.parser import parse_replay_dataset
-# from replay_parser.state import MAX_HEIGHT, MAX_WIDTH
-
-from nn.state_encoder import GNNStateEncoder
+from torch import optim
+import torch.nn.functional as F
 
 from torch_geometric.loader import DataLoader
-# from torch_geometric.data import Dataset
+
+from accelerate import Accelerator
+from accelerate.utils import GradientAccumulationPlugin
+from accelerate.utils import set_seed
+
+from replay_parser.parser import parse_replay_dataset
+
+from nn.state_encoder import GNNStateEncoder
 
 def prepare_dataloader(config: Namespace):
     """
     Prepare dataloader
+
+    :param config: Script config
+    :returns Dataloader for state dataset, node dimensions, and edge dimensions
     """
 
     replay_data = parse_replay_dataset(config)
 
-    input_dims = -1
+    node_dims = -1
+    edge_dims = -1
 
     dataset = []
     for _, pid, trace in replay_data:
         for state, _ in trace:
-            print(pid, state)
+
             contrast_state = deepcopy(state)
-            if input_dims == -1:
-                input_dims = state.x.shape[-1]
-            contrast_state.x[:, -1] = (1 - contrast_state.x[:, -1])
+            if node_dims == -1:
+                node_dims = state.x.shape[-1]
+
+            if edge_dims == -1:
+                edge_dims = state.edge_attr.shape[-1]
+
             dataset.append((state, contrast_state))
-    #         init_game_state = Image.fromarray(state[0].astype(np.uint8))
-    #         init_game_state = ImageOps.fit(init_game_state, (64, 64))
-    #         init_game_state.save(f'init-game-state-{filename}.png')
 
-    #         raise
-    return DataLoader(dataset, batch_size=config.batch_size), input_dims
+    return DataLoader(dataset, batch_size=config.batch_size, generator=config.rng), \
+        node_dims, edge_dims
 
-def create_model(input_dims: int, hidden_dims: int, config: Namespace):
+def create_model(node_dims: int, edge_dims: int, hidden_dims: int, _config: Namespace):
     """
     Create model
+
+    :param node_dims: Number of nodes features
+    :param edge_dims: Number of edge features
+    :param hidden_dims: Hidden dimensions
+    :param config: Script config
+    :returns: GNN state encoder model
     """
-    state_enc = GNNStateEncoder(input_dims, hidden_dims,
-                                alpha=config.alpha, theta=config.theta)
+
+    state_enc = GNNStateEncoder(node_dims, edge_dims, hidden_dims)
+
     return state_enc
 
-def compute_loss(output_1: torch.Tensor, output_2: torch.Tensor):
+def compute_loss(graph_embedding_1: torch.Tensor, graph_embedding_2: torch.Tensor):
     """
-    Compute contrastive loss
+    Compute SimCLR contrastive loss
+
+    :param graph_embedding_1: Embedding from first graph
+    :param graph_embedding_1: Embedding from second graph
+    :returns: SimCLR loss between the two graph embeddings
     """
 
-    # Sum over each subset & average over each batch
-    loss_fn = torch.nn.MSELoss(reduction='mean')
-    # Cross entropy loss require (batch_size, x1 y1 x2 y2, ...)
-    loss = loss_fn(output_1, output_2)
+    batch_size = graph_embedding_1.shape[0]
+
+    # Pairwise similarity
+    norm_graph_embedding_1 = F.normalize(graph_embedding_1, p=2, dim=1)
+    norm_graph_embedding_2 = F.normalize(graph_embedding_2, p=2, dim=1)
+
+    graph_embeddings = torch.concat(
+        [norm_graph_embedding_1, norm_graph_embedding_2], dim=0)
+
+    sim = torch.matmul(graph_embeddings, graph_embeddings.T)
+    sim = (1 - torch.eye(sim.shape[0]))*sim + 1e-8
+
+    row_softmax = torch.log_softmax(sim, dim=0)
+    col_softmax = torch.log_softmax(sim, dim=1)
+
+    loss = 0
+    for i in range(batch_size):
+        loss += (row_softmax[i, batch_size+i] + col_softmax[batch_size+1, i])
+    loss = loss / 2*batch_size
+
     return loss
 
-# @torch.no_grad()
-# def eval_loop(epoch: int, model: torch.nn.Module,
-#               dataloader, wandb_run):
-#     """
-#     Evaluation loop
-#     """
-
-#     columns = ['pred']
-
-#     dataframe = []
-#     original_images = []
-#     images = []
-#     gt = []
-
-#     avg_loss = 0
-#     for i, batch in enumerate(dataloader):
-
-#         logits = model(batch['image'])
-#         labels = batch['label']
-
-#         preds = torch.argmax(logits, dim=-1)
-#         loss = compute_loss(logits, labels)
-#         avg_loss += loss.item()
-
-#         # acc = (preds == labels).double()
-#         # print(f"Accuracy: {acc.mean().item()} - Val loss: {loss.item()}")
-#         # wandb_run.log({'accuracy': acc.mean()}, commit=False)
-#         # wandb_run.log({'val-loss': loss.item()}, commit=False)
-        
-#         for j in range(batch['image'].shape[0]):
-#             images.append(batch['image'][j,:])
-#             original_images.append(batch['original-image'][j,:])
-
-#         dataframe += preds.tolist()
-#         gt += batch['label'].tolist()
-
-#         if i == 10:
-#             break
-
-#     dataframe = pd.DataFrame(dataframe,
-#                              columns=columns)
-#     dataframe['epoch'] = epoch
-#     dataframe['image'] = images
-#     dataframe['image'] = dataframe['image'].apply(tensor_to_pil)
-#     dataframe['image'] = dataframe['image'].apply(wandb.Image)
-#     dataframe['original_images'] = original_images
-#     dataframe['original_images'] = dataframe['original_images'].apply(tensor_to_pil)
-#     dataframe['original_images'] = dataframe['original_images'].apply(wandb.Image)
-
-#     # dataframe['image'] = \
-#     #     [wandb.Image(image) for image in images]
-#     # dataframe['original_images'] = \
-#     #     [wandb.Image(image) for image in original_images]
-#     dataframe['gt'] = gt
-
-#     # Get average accuracy and loss
-#     acc = (dataframe['gt'] == dataframe['pred']).mean()
-#     avg_loss = avg_loss/len(dataloader)
-
-#     accelerator.print(
-#         f"Val accuracy and loss: {acc} - {avg_loss}")
-
-#     table = wandb.Table(data=dataframe)
-#     wandb_run.log({'accuracy': acc}, commit=False)
-#     wandb_run.log({'val-loss': loss}, commit=False)
-#     wandb_run.log({'eval-table': table})
-
-def training_loop(config: Namespace):
+def training_loop(config: Namespace, debug_mode=False):
     """
     Training loop
+
+    :param config: Script config
+    :param debug_mode: True if using debug mode
     """
 
-    # wandb_run = wandb.init(project='MicroRTS-Replay-Analyzer', entity=None,
-    #                        job_type='training',
-    #                        name=config.run_name,
-    #                        config=config)
+    wandb_run = None
+    if not debug_mode:
+        wandb_run = wandb.init(project=config.project_name, entity=None,
+                            job_type='training',
+                            name=config.run_name,
+                            config=config)
 
-    # set_seed(config.seed)
+        wandb_run.define_metric("epoch")
+        wandb_run.define_metric("training_step")
 
-    dataloader, input_dims = prepare_dataloader(config)
-    model = create_model(input_dims, config.hidden_dims, config)
+        wandb_run.define_metric('val_total_loss', step_metric='epoch')
+
+        wandb_run.define_metric('step_loss', step_metric='training_step')
+
+        wandb_run.define_metric('epoch_loss', step_metric='training_step')
+
+        wandb_run.define_metric('lr', step_metric='training_step')
+
+    accelerator: Accelerator = None
+    if not debug_mode:
+        set_seed(config.seed)
+
+        grad_accumulation_plugin = GradientAccumulationPlugin(
+            num_steps=config.grad_accumulation_steps,
+            adjust_scheduler=True,
+            sync_with_dataloader=True)
+
+        accelerator = Accelerator(
+            mixed_precision=config.mixed_precision,
+            gradient_accumulation_plugin=grad_accumulation_plugin,
+            cpu=(config.device == 'cpu'))
+
+    dataloader, node_dims, edge_dims = prepare_dataloader(config)
+    model = create_model(node_dims, edge_dims, config.hidden_dims, config)
     ema_model = deepcopy(model)
 
     optimizer = optim.AdamW(model.parameters(), lr=config.learning_rate)
@@ -165,6 +156,10 @@ def training_loop(config: Namespace):
 #         T_0=config.lr_warmup_steps)
         # last_epoch=config.num_train_epochs*len(train_dataloader))
 
+    if accelerator:
+        model, optimizer, dataloader, scheduler \
+            = accelerator.prepare(model, optimizer, dataloader, scheduler)
+
     num_steps = 0
     for epoch in range(config.num_train_epochs):
         model.train()
@@ -175,20 +170,44 @@ def training_loop(config: Namespace):
         num_iters = 0
 
         for _, batch in enumerate(dataloader):
-    
-            optimizer.zero_grad()
-            input_1, input_2 = batch
-            output_1 = model(input_1.x, input_1.edge_index, input_1.edge_attr)
-            output_2 = ema_model(input_2.x, input_2.edge_index, input_2.edge_attr)
 
-            loss = compute_loss(output_1, output_2)
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.zero_grad()
+            state, contrast_state = batch
+            perturbed_contrast_state = deepcopy(contrast_state)
+
+            rand_val = torch.rand(1, generator=config.rng)
+            scale_diff = config.max_scale_factor-config.min_scale_factor
+            scale_factor = rand_val*(scale_diff)+(1.0-(scale_diff/2.0))
+            perturbed_contrast_state.edge_attr[:, 0] = \
+                scale_factor*perturbed_contrast_state.edge_attr[:, 0]
+
+            _, graph_embedding_1, proj_embedding_1 = model(
+                state.x, state.edge_index, state.edge_attr,
+                state.batch)
+
+            _, graph_embedding_2, proj_embedding_2 = ema_model(
+                perturbed_contrast_state.x,
+                perturbed_contrast_state.edge_index,
+                perturbed_contrast_state.edge_attr,
+                state.batch)
+
+            loss = compute_loss(proj_embedding_1, proj_embedding_2)
+
+            # accelerator.print(f"Loss: {loss.item()}")
+            if accelerator:
+                accelerator.backward(loss)
+                accelerator.clip_grad_norm_(model.parameters(), 1.0)
+            else:
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
 
             epoch_loss += loss.item()
 
-            # wandb_run.log({'loss': loss.item()}, commit=False, step=num_steps)
-            # wandb_run.log({'lr': scheduler.get_lr()[0]}, commit=False, step=num_steps)
+            if wandb_run:
+                wandb_run.log({'training_step': num_steps, 'step_loss': loss.item()})
+                wandb_run.log({'training_step': num_steps, 'lr': scheduler.get_lr()[0]})
+            else:
+                print(f"Step loss: {loss.item()}")
 
             if num_steps % config.update_freq == 0:
                 ema_state_dict = ema_model.state_dict()
@@ -208,7 +227,10 @@ def training_loop(config: Namespace):
         # accelerator.print("Evaluating model")
         # eval_loop(epoch, model, val_dataloader, wandb_run)
 
-        # wandb_run.log({'epoch-loss': epoch_loss/num_iters})
+        if wandb_run:
+            wandb_run.log({'training_step': num_steps, 'epoch_loss': epoch_loss/num_iters})
+        else:
+            print(f"Epoch loss: {epoch_loss}")
 
     if config.save_model:
         # Save model to W&Bs
@@ -218,7 +240,8 @@ def training_loop(config: Namespace):
         # model_art.add_file(config.save_model)
         # wandb_run.log_artifact(model_art)
 
-    # wandb_run.finish()
+    if wandb_run:
+        wandb_run.finish()
 
 def get_config():
     """
@@ -262,15 +285,29 @@ def get_config():
                         help="Alpha value for Exponential Moving Average (EMA)")
 
     # Model Config
+    parser.add_argument("--model_name", default="microrts-gnn-state-encoder", type=str,
+                        help="Name of model")
     parser.add_argument("--save_model", default=None, type=str,
                         help="Filename for model")
 
-    config = parser.parse_args()
+    # Weights and Biases
+    parser.add_argument('--project_name', default="microrts-graph-replay-encoder",
+                        type=str, help="Name of project on W&Bs")
+    parser.add_argument('--run_name', default="run-0",
+                        type=str, help="Name of run on W&Bs")
 
-    config.model_name = "microrts-gnn-state-encoder"
+    # Data Augmentation Config
+    parser.add_argument("--min_scale_factor", default=0.8, type=float,
+                        help="Minimum distance scaling factor")
+    parser.add_argument("--max_scale_factor", default=1.2, type=float,
+                        help="Maximum distance scaling factor")
+
+    config = parser.parse_args()
 
     config.alpha = [0.99, 0.99]
     config.theta = [0.99, 0.99]
+
+    config.rng = torch.Generator().manual_seed(config.seed)
 
     return config
 
@@ -281,20 +318,6 @@ def main():
 
     config = get_config()
     training_loop(config)
-
-    # filenames = []
-    # gnn_enc = GNNStateEncoder(12, 128, alpha=[0.99, 0.99], theta=[0.99, 0.99])
-    # for filename, pid, trace in replay_data:
-    #     gs = trace[0][0]
-    #     out = gnn_enc(gs.x, gs.edge_index, gs.edge_attr)
-    #     print(f"GCN output: {out.shape}")
-    #     raise
-    #     if filename not in filenames:
-    #         filenames.append(filename)
-
-            # init_game_state = Image.fromarray(trace[0][0][-1].astype(np.uint8))
-    #         init_game_state = ImageOps.fit(init_game_state, (64, 64))
-    #         init_game_state.save(f'init-game-state-{filename}.png')
 
 if __name__ == "__main__":
     main()
