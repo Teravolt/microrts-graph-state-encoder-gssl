@@ -9,6 +9,9 @@ import torch.nn.functional as F
 from torch_geometric.nn import GATv2Conv
 
 class GNNStateEncoder(nn.Module):
+    """
+    Encode state using GNN
+    """
 
     def __init__(self, node_in_dims: int, edge_in_dims: int, hidden_dims: int) -> None:
         super().__init__()
@@ -19,8 +22,12 @@ class GNNStateEncoder(nn.Module):
             hidden_dims,
             hidden_dims,
             edge_dim=edge_in_dims)
-        self.gnn_layer_2 = GATv2Conv(hidden_dims, hidden_dims, edge_dim=edge_in_dims)
+        self.gnn_layer_2 = GATv2Conv(
+            hidden_dims,
+            hidden_dims,
+            edge_dim=edge_in_dims)
 
+        # Used for SimCLR objective
         self.projection_1 = nn.Linear(hidden_dims, hidden_dims)
         self.projection_2 = nn.Linear(hidden_dims, hidden_dims)
 
@@ -58,19 +65,23 @@ class GNNStateEncoder(nn.Module):
             graph_embedding = mean if graph_embedding is None \
                 else torch.concat([graph_embedding, mean], dim=0)
 
+        # Projection embedding needed for SimCLR
         proj_embedding = F.relu(self.projection_1(graph_embedding))
         proj_embedding = self.projection_2(proj_embedding)
 
         return gnn_out_2, graph_embedding, proj_embedding
 
-class MLPStateEncoder():
+# class MLPStateEncoder():
+#     """
+#     Encode state using MLP
+#     """
 
-    def __init__(self, in_dims: int, hidden_dims: int) -> None:
-        super().__init__()
+#     def __init__(self, in_dims: int, hidden_dims: int) -> None:
+#         super().__init__()
 
-        self.linear_1 = nn.Linear(in_dims, hidden_dims)
+#         self.linear_1 = nn.Linear(in_dims, hidden_dims)
 
-    def forward(self, x: torch.Tensor):
-        """
-        Forward pass
-        """
+#     def forward(self, x: torch.Tensor):
+#         """
+#         Forward pass
+#         """

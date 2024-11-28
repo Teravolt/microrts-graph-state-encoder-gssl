@@ -7,8 +7,6 @@ from argparse import Namespace
 
 from copy import deepcopy
 
-import wandb
-
 import torch
 from torch import optim
 import torch.nn.functional as F
@@ -18,6 +16,10 @@ from torch_geometric.loader import DataLoader
 from accelerate import Accelerator
 from accelerate.utils import GradientAccumulationPlugin
 from accelerate.utils import set_seed
+
+from diffusers import get_cosine_schedule_with_warmup
+
+import wandb
 
 from replay_parser.parser import parse_replay_dataset
 
@@ -37,7 +39,15 @@ def prepare_dataloader(config: Namespace):
     edge_dims = -1
 
     dataset = []
-    for _, pid, trace in replay_data:
+    for filename, pid, trace in replay_data:
+        _, players, *_ = filename.split('.')
+        player_1, _, player_2, *_ = players.split('-')
+        players = [player_1, player_2]
+        if players[pid] in config.ignore_players:
+            # Don't add player data to dataset
+            # print(filename, players, players[pid])
+            continue
+
         for state, _ in trace:
 
             contrast_state = deepcopy(state)
@@ -49,7 +59,7 @@ def prepare_dataloader(config: Namespace):
 
             dataset.append((state, contrast_state))
 
-    return DataLoader(dataset, batch_size=config.batch_size, generator=config.rng), \
+    return DataLoader(dataset, batch_size=config.batch_size, generator=config.rng, shuffle=True), \
         node_dims, edge_dims
 
 def create_model(node_dims: int, edge_dims: int, hidden_dims: int, _config: Namespace):
@@ -93,10 +103,10 @@ def compute_loss(graph_embedding_1: torch.Tensor, graph_embedding_2: torch.Tenso
 
     loss = 0
     for i in range(batch_size):
-        loss += (row_softmax[i, batch_size+i] + col_softmax[batch_size+1, i])
-    loss = loss / 2*batch_size
+        loss += (row_softmax[i, batch_size+i] + col_softmax[batch_size+i, i])
+    loss = loss / (2*batch_size)
 
-    return loss
+    return -loss
 
 def training_loop(config: Namespace, debug_mode=False):
     """
@@ -105,24 +115,6 @@ def training_loop(config: Namespace, debug_mode=False):
     :param config: Script config
     :param debug_mode: True if using debug mode
     """
-
-    wandb_run = None
-    if not debug_mode:
-        wandb_run = wandb.init(project=config.project_name, entity=None,
-                            job_type='training',
-                            name=config.run_name,
-                            config=config)
-
-        wandb_run.define_metric("epoch")
-        wandb_run.define_metric("training_step")
-
-        wandb_run.define_metric('val_total_loss', step_metric='epoch')
-
-        wandb_run.define_metric('step_loss', step_metric='training_step')
-
-        wandb_run.define_metric('epoch_loss', step_metric='training_step')
-
-        wandb_run.define_metric('lr', step_metric='training_step')
 
     accelerator: Accelerator = None
     if not debug_mode:
@@ -147,9 +139,12 @@ def training_loop(config: Namespace, debug_mode=False):
 # #     scheduler = CosineAnnealingLR(
 # #         optimizer,
 # #         T_max=config.num_train_epochs)
-    scheduler = optim.lr_scheduler.ExponentialLR(
-        optimizer,
-        config.lr_exp_schedule_gamma)
+    # scheduler = optim.lr_scheduler.ExponentialLR(
+    #     optimizer,
+    #     config.lr_exp_schedule_gamma)
+
+    scheduler = get_cosine_schedule_with_warmup(
+        optimizer, config.lr_warmup_steps, len(dataloader)*config.num_train_epochs)
 
 #     scheduler = CosineAnnealingWarmRestarts(
 #         optimizer,
@@ -159,6 +154,24 @@ def training_loop(config: Namespace, debug_mode=False):
     if accelerator:
         model, optimizer, dataloader, scheduler \
             = accelerator.prepare(model, optimizer, dataloader, scheduler)
+
+    wandb_run = None
+    if not debug_mode:
+        wandb_run = wandb.init(project=config.project_name, entity=None,
+                            job_type='training',
+                            name=config.run_name,
+                            config=config)
+
+        wandb_run.define_metric("epoch")
+        wandb_run.define_metric("training_step")
+
+        wandb_run.define_metric('val_total_loss', step_metric='epoch')
+
+        wandb_run.define_metric('step_loss', step_metric='training_step')
+
+        wandb_run.define_metric('epoch_loss', step_metric='training_step')
+
+        wandb_run.define_metric('lr', step_metric='training_step')
 
     num_steps = 0
     for epoch in range(config.num_train_epochs):
@@ -175,7 +188,7 @@ def training_loop(config: Namespace, debug_mode=False):
             state, contrast_state = batch
             perturbed_contrast_state = deepcopy(contrast_state)
 
-            rand_val = torch.rand(1, generator=config.rng)
+            rand_val = torch.rand(1, generator=config.rng, device=config.device)
             scale_diff = config.max_scale_factor-config.min_scale_factor
             scale_factor = rand_val*(scale_diff)+(1.0-(scale_diff/2.0))
             perturbed_contrast_state.edge_attr[:, 0] = \
@@ -185,11 +198,12 @@ def training_loop(config: Namespace, debug_mode=False):
                 state.x, state.edge_index, state.edge_attr,
                 state.batch)
 
-            _, graph_embedding_2, proj_embedding_2 = ema_model(
-                perturbed_contrast_state.x,
-                perturbed_contrast_state.edge_index,
-                perturbed_contrast_state.edge_attr,
-                state.batch)
+            with torch.no_grad():
+                _, graph_embedding_2, proj_embedding_2 = ema_model(
+                    perturbed_contrast_state.x,
+                    perturbed_contrast_state.edge_index,
+                    perturbed_contrast_state.edge_attr,
+                    state.batch)
 
             loss = compute_loss(proj_embedding_1, proj_embedding_2)
 
@@ -221,7 +235,7 @@ def training_loop(config: Namespace, debug_mode=False):
 
             # Update the model parameters with the optimizer
             optimizer.step()
-        scheduler.step()
+            scheduler.step()
 
         # Validate model
         # accelerator.print("Evaluating model")
@@ -234,11 +248,12 @@ def training_loop(config: Namespace, debug_mode=False):
 
     if config.save_model:
         # Save model to W&Bs
-        # model_art = wandb.Artifact(config.model_name, type='model')
-        torch.save(model.state_dict(), config.save_model)
 
-        # model_art.add_file(config.save_model)
-        # wandb_run.log_artifact(model_art)
+        torch.save(model.state_dict(), config.save_model)
+        if wandb_run:
+            model_art = wandb.Artifact(config.model_name, type='model')
+            model_art.add_file(config.save_model)
+            wandb_run.log_artifact(model_art)
 
     if wandb_run:
         wandb_run.finish()
@@ -262,6 +277,8 @@ def get_config():
                         help='Allow coordinates in states and actions')
     parser.add_argument('--unit_actions_to_ignore', type=list, default=[],
                         help='Unit actions to ignore')
+    parser.add_argument('--state_representation', type=str, default='graph',
+                        help="State representation to use")
     parser.add_argument('--max_replays', default=-1, type=int,
                         help='Maximum number of replays to read')
     parser.add_argument('--max_replay_length', default=-1, type=int,
@@ -275,15 +292,22 @@ def get_config():
                         help='Hidden dim size')
     parser.add_argument("--num_train_epochs", default=10, type=int,
                         help="Number of training epochs")
-    parser.add_argument("--learning_rate", default=128, type=float,
+    parser.add_argument("--learning_rate", default=4e-4, type=float,
                         help='Optimizer learning rate')
     parser.add_argument("--lr_exp_schedule_gamma", default=0.99, type=float,
                         help="Gamma value for exponential lr scheduler")
+    parser.add_argument("--lr_warmup_steps", default=1000, type=int,
+                        help="Number of warmup steps for cosine scheduler")
     parser.add_argument("--update_freq", default=100, type=int,
                         help="Frequency to update siamese network")
     parser.add_argument("--ema_alpha", default=0.99, type=float,
                         help="Alpha value for Exponential Moving Average (EMA)")
-
+    parser.add_argument('--grad_accumulation_steps', default=4, type=int,
+                        help="Number of steps to accumulate gradients")
+    parser.add_argument('--mixed_precision', default=None, type=str,
+                        help="Mixed-precision training")
+    parser.add_argument('--device', default=None, type=str,
+                        help="Device to run model and training")
     # Model Config
     parser.add_argument("--model_name", default="microrts-gnn-state-encoder", type=str,
                         help="Name of model")
@@ -304,10 +328,18 @@ def get_config():
 
     config = parser.parse_args()
 
+    if config.device is None:
+        config.device = torch.device(
+            'cuda' if torch.cuda.is_available() \
+                else 'mps' if torch.backends.mps.is_available() else 'cpu')
+
+
     config.alpha = [0.99, 0.99]
     config.theta = [0.99, 0.99]
 
-    config.rng = torch.Generator().manual_seed(config.seed)
+    config.ignore_players = ['0']
+
+    config.rng = torch.Generator(config.device).manual_seed(config.seed)
 
     return config
 
@@ -317,7 +349,7 @@ def main():
     """
 
     config = get_config()
-    training_loop(config)
+    training_loop(config, debug_mode=False)
 
 if __name__ == "__main__":
     main()

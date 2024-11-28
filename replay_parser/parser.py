@@ -116,14 +116,22 @@ def parse_replay_xml(filename: str, config: dict):
             unit_actions_to_ignore,
             allow_coordinates=allow_coordinates)
 
-        state = build_graph_state(unit_data_map)
-        # state = build_image_state(height, width, arena_map_str, unit_data_map)
-        # state = build_simple_feature_vector_state(unit_data_map)
+        is_graph = False
+        if config.state_representation == "graph":
+            state = build_graph_state(unit_data_map)
+            is_graph = True
+        elif config.state_representation == "feature":
+            state = build_simple_feature_vector_state(unit_data_map)
+        elif config.state_representation == "image":
+            state = build_image_state(height, width, arena_map_str, unit_data_map)
+        else:
+            raise ValueError(
+                f'Unknown state representation: {config.state_representation}')
 
         __add_state_action(state,
                            pid_to_action,
                            player_to_trace,
-                           is_graph=True)
+                           is_graph=is_graph)
 
     player_to_trace = [
         (pid, player_to_trace[pid]) for pid in player_ids]
