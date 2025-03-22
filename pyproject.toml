@@ -21,6 +21,8 @@ scipy = "^1.11.1"
 transformers = "^4.31.0"
 accelerate = "^1.1.0"
 diffusers = "^0.31.0"
+umap-learn = "^0.5.7"
+scikit-learn-extra = "^0.3.0"
 
 
 [tool.poetry.group.dev.dependencies]
