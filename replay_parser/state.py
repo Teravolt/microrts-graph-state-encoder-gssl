@@ -11,6 +11,8 @@ from torch import nn
 
 from torch_geometric.data import Data
 
+from transformers import AutoTokenizer, AutoModelForMaskedLM
+
 UNIT_TYPE_TO_COLOR = {
     "worker": (128, 128, 128, 1.0),
     "base": (255, 255, 255, 1.0),
@@ -28,6 +30,39 @@ PLAYER_TO_COLOR = {
     "enemy": (255, 0, 0, 1.0)
     }
 
+UNIT_TYPE_TO_ID = {
+    "worker": 2,
+    "base": 3,
+    "barracks": 4,
+    "heavy": 5,
+    "light": 6,
+    "ranged": 7,
+    "resource": 8
+}
+ID_TO_UNIT_TYPE = {
+    0: "empty",
+    1: "wall",
+    2: "worker",
+    3: "base",
+    4: "barracks",
+    5: "heavy",
+    6: "light",
+    7: "ranged",
+    8: "resource"
+}
+
+UNIT_TYPE_ID_TO_CHARACTER = {
+    'empty': '-',
+    'wall': "|",
+    "worker": 'W',
+    "base": '@',
+    "barracks": '#',
+    "heavy": 'H',
+    "light": 'L',
+    "ranged": 'R',
+    "resource": '$'
+}
+
 NUM_PLAYER_FEATURES = 14
 NUM_GAME_FEATURES = 2
 NUM_STATE_FEATURES = NUM_PLAYER_FEATURES + NUM_GAME_FEATURES
@@ -36,6 +71,14 @@ SCALE_FACTOR = 8
 UPSAMPLER = nn.Upsample(
     scale_factor=SCALE_FACTOR,
     mode='nearest')
+
+DEVICE = torch.device(
+    'cuda' if torch.cuda.is_available() \
+        else 'mps' if torch.backends.mps.is_available() else 'cpu')
+
+MODEL_ID = 'facebook/bart-large'
+TOKENIZER = AutoTokenizer.from_pretrained(MODEL_ID)
+TEXT_EMBEDDING_MODEL = AutoModelForMaskedLM.from_pretrained(MODEL_ID).to(DEVICE)
 
 def build_simple_feature_vector_state(unit_data_map: dict):
     """
@@ -278,3 +321,106 @@ def build_image_state(height: int, width: int,
     state = np.stack(player_states + [upsampled_game_state], axis=0)
 
     return state
+
+def build_character_state(height: int, width: int,
+                          arena_map_str,
+                          unit_data_map):
+    """
+    Build 2D grid with characters
+
+    :param height: Height of the game map
+    :param width: Width of the game map
+    :param arena_map_str: Game map in string representation
+    :param unit_data_map: Unit information
+    """
+
+    players = []
+
+    for _, unit_data in unit_data_map.items():
+        player_id = int(unit_data['player'])
+        if player_id != -1:
+            if player_id not in players:
+                players.append(player_id)
+
+    game_map = np.zeros((height, width))
+
+    total_num_tiles = width*height
+    i = 0
+
+    while i < total_num_tiles:
+        row_str = arena_map_str[i:i+width]
+
+        for j, elem in enumerate(row_str):
+            if elem != '1':
+                game_map[i // width, j] = 0
+                # row.append([0, 0, 0]) # r, g, b
+            else:
+                game_map[i // width, j] = 1
+                # row.append([1, 1, 1])
+
+        i += width
+
+    max_player_id = max(players)
+    base_state_features = np.stack([np.array(game_map)]*(max_player_id+1))
+    # print(f"State feature shape: {state_features.shape}")
+    # print(f"Players: {players}")
+
+    for _, unit_data in unit_data_map.items():
+        x = int(unit_data['x'])
+        y = int(unit_data['y'])
+
+        unit_type = unit_data['type'].lower()
+        player_id = int(unit_data['player'])
+
+        if player_id == -1:
+            for i in range(base_state_features.shape[0]):
+                base_state_features[i, y, x] = UNIT_TYPE_TO_ID[unit_type]
+        else:
+            base_state_features[player_id, y, x] = UNIT_TYPE_TO_ID[unit_type]
+
+    state_features = []
+    for player_id in range(base_state_features.shape[0]):
+        batch_text = []
+        for x in range(base_state_features[player_id].shape[1]):
+            text = []
+            for y in range(base_state_features[player_id].shape[0]):
+                token = UNIT_TYPE_ID_TO_CHARACTER[ID_TO_UNIT_TYPE[int(base_state_features[player_id,y,x])]]
+                text.append(token)
+
+            batch_text.append(', '.join(text))
+
+        with torch.no_grad():
+            model_input = TOKENIZER(batch_text, return_tensors="pt",
+                                    padding='max_length', truncation=True)
+            # print(model_input['input_ids'].shape)
+            output = TEXT_EMBEDDING_MODEL(**model_input)
+
+            last_hidden_state = output.encoder_last_hidden_state
+            last_hidden_state = last_hidden_state.mean(dim=1)
+            # print(f"Mean of second dimension: {last_hidden_state.shape}")
+            last_hidden_state = last_hidden_state.mean(dim=0)
+            # print(f"Mean of first dimension: {last_hidden_state.shape}")
+
+            # print(f"Player ID: {player_id}; State Embedding: {state_embedding.shape}")
+            state_features.append(last_hidden_state)
+
+    state_features = torch.stack(state_features, dim=0)
+    return state_features
+
+# def build_text_state(config: Namespace):
+#     """
+#     Construct text representation of a state
+
+#     :param height: Height of the game map
+#     :param width: Width of the game map
+#     :param arena_map_str: Game map in string representation
+#     :param unit_data_map: Unit information
+
+#     :returns: Text embedding as state
+#     """
+
+#     # TODO: How can we represent the state as text (i.e., free-form text)
+
+#     # Map Information
+#     # Unit Information
+    

@@ -16,6 +16,7 @@ class GNNStateEncoder(nn.Module):
     def __init__(self, node_in_dims: int, edge_in_dims: int, hidden_dims: int) -> None:
         super().__init__()
 
+        # self.layer_norm = nn.LayerNorm(node_in_dims)
         self.node_linear_1 = nn.Linear(node_in_dims, hidden_dims)
 
         self.gnn_layer_1 = GATv2Conv(
@@ -26,6 +27,14 @@ class GNNStateEncoder(nn.Module):
             hidden_dims,
             hidden_dims,
             edge_dim=edge_in_dims)
+        # self.gnn_layer_3 = GATv2Conv(
+        #     hidden_dims,
+        #     hidden_dims,
+        #     edge_dim=edge_in_dims)
+        # self.gnn_layer_4 = GATv2Conv(
+        #     hidden_dims,
+        #     hidden_dims,
+        #     edge_dim=edge_in_dims)
 
         # Used for SimCLR objective
         self.projection_1 = nn.Linear(hidden_dims, hidden_dims)
@@ -40,8 +49,9 @@ class GNNStateEncoder(nn.Module):
         """
 
         # print(f"Input dimensions: {x.shape}")
-
+        # node_out = self.layer_norm(x)
         node_out = self.node_linear_1(x)
+        node_out = F.relu(node_out)
         # edge_out = self.edge_linear_1(edge_weights)
 
         # print(f"Node output: {node_out.shape}")
@@ -54,6 +64,14 @@ class GNNStateEncoder(nn.Module):
         gnn_out_2 = self.gnn_layer_2(x=gnn_out_1,
                                      edge_index=edge_indices,
                                      edge_attr=edge_weights)
+
+        # gnn_out_3 = self.gnn_layer_3(x=gnn_out_2,
+        #                              edge_index=edge_indices,
+        #                              edge_attr=edge_weights)
+
+        # gnn_out_4 = self.gnn_layer_4(x=gnn_out_3,
+        #                              edge_index=edge_indices,
+        #                              edge_attr=edge_weights)
 
         # print(f"GNN layer output 2: {gnn_out_2.shape}")
 
@@ -71,17 +89,39 @@ class GNNStateEncoder(nn.Module):
 
         return gnn_out_2, graph_embedding, proj_embedding
 
-# class MLPStateEncoder():
+# class TokenGridStateEncoder(nn.Module):
 #     """
-#     Encode state using MLP
+#     Grid-based state encoder
 #     """
 
-#     def __init__(self, in_dims: int, hidden_dims: int) -> None:
+#     def __init__(self):
 #         super().__init__()
 
-#         self.linear_1 = nn.Linear(in_dims, hidden_dims)
+#         self.tokenizer = AutoTokenizer.from_pretrained(model_id)
+#         self.text_embedding_model = AutoModelForMaskedLM.from_pretrained(model_id)
 
 #     def forward(self, x: torch.Tensor):
 #         """
 #         Forward pass
 #         """
+
+#         output = self.text_embedding_model(x)
+#         print(f"Output: {output.shape}")
+#         raise
+
+class MLPStateEncoder(nn.Module):
+    """
+    Encode state using MLP
+    """
+
+    def __init__(self, in_dims: int, hidden_dims: int) -> None:
+        super().__init__()
+
+        self.linear_1 = nn.Linear(in_dims, hidden_dims)
+
+    def forward(self, x: torch.Tensor):
+        """
+        Forward pass
+        """
+
+        return self.linear_1(x)

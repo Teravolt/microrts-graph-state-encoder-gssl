@@ -33,16 +33,17 @@ class BatchSampler(torch.utils.data.Sampler[list[int]]):
     Custom batch sampler where each "batch" is the sequence of states
     from a single replay
     """
+
     def __init__(self, indices: list[int]):
         self.indices = indices
 
     def __len__(self) -> int:
         return len(self.indices)
-    
+
     def __iter__(self):
         for i in range(len(self.indices)):
             yield self.indices[i]
-                
+
 def prepare_dataloader(config: Namespace):
     """
     Prepare dataloader
@@ -110,6 +111,9 @@ def compute_loss(graph_embedding_1: torch.Tensor, graph_embedding_2: torch.Tenso
     :param graph_embedding_1: Embedding from second graph
     :returns: SimCLR loss between the two graph embeddings
     """
+
+    print(f"Graph embedding 1: {graph_embedding_1.shape}")
+    print(f"Graph embedding 2: {graph_embedding_2.shape}")
 
     batch_size = graph_embedding_1.shape[0]
 
@@ -255,25 +259,38 @@ def training_loop(config: Namespace, debug_mode=False):
             # perturbed_contrast_state.edge_attr[:, 0] = \
             #     scale_factor*perturbed_contrast_state.edge_attr[:, 0]
 
-            _, graph_embedding_1, _ = model.state_encoder(
+            replay_output_1 = model(
                 perturbed_state_1.x,
                 perturbed_state_1.edge_index,
                 perturbed_state_1.edge_attr,
                 perturbed_state_1.batch)
 
+            # _, graph_embedding_1, _ = model.state_encoder(
+            #     perturbed_state_1.x,
+            #     perturbed_state_1.edge_index,
+            #     perturbed_state_1.edge_attr,
+            #     perturbed_state_1.batch)
+
             # with torch.no_grad():
-            _, graph_embedding_2, _ = model.state_encoder(
+            # _, graph_embedding_2, _ = model.state_encoder(
+            #     perturbed_state_2.x,
+            #     perturbed_state_2.edge_index,
+            #     perturbed_state_2.edge_attr,
+            #     perturbed_state_2.batch)
+
+            replay_output_2 = model(
                 perturbed_state_2.x,
                 perturbed_state_2.edge_index,
                 perturbed_state_2.edge_attr,
                 perturbed_state_2.batch)
 
-            graph_embedding_1 = graph_embedding_1.unsqueeze(0)
-            graph_embedding_2 = graph_embedding_2
+            # graph_embedding_1 = graph_embedding_1.unsqueeze(0)
+            # graph_embedding_2 = graph_embedding_2
 
-            replay_output = model.replay_encoder(graph_embedding_1)
+            # replay_output = model.replay_encoder(graph_embedding_1)
 
-            loss = compute_loss(replay_output.squeeze(0), graph_embedding_2)
+            loss = compute_loss(replay_output_1.squeeze(0),
+                                replay_output_2.squeeze(0))
             # accelerator.print(f"Loss: {loss.item()}")
             if accelerator:
                 accelerator.backward(loss)
@@ -334,7 +351,7 @@ def get_config():
     """
 
     parser = argparse.ArgumentParser(
-        description='Train MicroRTS GNN State Encoder',
+        description='Train MicroRTS GNN Replay Encoder',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
     # Replay Config
@@ -376,6 +393,9 @@ def get_config():
                         help="Mixed-precision training")
     parser.add_argument('--device', default=None, type=str,
                         help="Device to run model and training")
+    parser.add_argument('--debug_mode', action='store_true',
+                        help="Flag to turn on debugging mode.")
+
     # Model Config
     parser.add_argument("--model_name", default="microrts-gnn-state-encoder", type=str,
                         help="Name of model")
@@ -419,7 +439,7 @@ def main():
     """
 
     config = get_config()
-    training_loop(config, debug_mode=False)
+    training_loop(config, debug_mode=config.debug_mode)
 
 if __name__ == "__main__":
     main()

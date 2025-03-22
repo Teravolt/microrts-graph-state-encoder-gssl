@@ -16,14 +16,15 @@ from tqdm import tqdm
 
 from replay_parser.action import create_unit_actions
 from replay_parser.state import build_simple_feature_vector_state, \
-    build_image_state, build_graph_state
+    build_image_state, build_graph_state, build_character_state
 
 from replay_parser.utils.log_utils import LoggingUtils
 
 def __add_state_action(state,
                        pid_to_action: dict,
                        player_to_trace: dict,
-                       is_graph=False):
+                       is_graph=False,
+                       is_2d_text=False):
     """
     Help add state-action pair to state-action traces
 
@@ -44,6 +45,15 @@ def __add_state_action(state,
                     player_state.x[j, -1] = 1
 
             action = None if i not in pid_to_action else pid_to_action[i]
+            player_to_trace[i].append((player_state, action))
+    elif is_2d_text:
+        for i in range(state.shape[0]):
+            if i not in player_to_trace:
+                player_to_trace[i] = []
+
+            action = None if i not in pid_to_action else pid_to_action[i]
+
+            player_state = state[i]
             player_to_trace[i].append((player_state, action))
     else:
         for i in range(state.shape[0]-1):
@@ -70,6 +80,7 @@ def parse_replay_xml(filename: str, config: dict):
     allow_coordinates = config.allow_coordinate
     unit_actions_to_ignore = config.unit_actions_to_ignore
     max_replay_length = config.max_replay_length
+    frame_skip_freq = config.frame_skip_freq
 
     player_to_trace = {}
     player_ids = []
@@ -91,8 +102,11 @@ def parse_replay_xml(filename: str, config: dict):
     # player_action_data['duplicate_index'] = 0
 
     for i, trace_entry in enumerate(root.find('entries')):
+        # Assuming each entry here is a frame
+        if i % frame_skip_freq != 0:
+            continue
 
-        if max_replay_length != -1 and max_replay_length == i:
+        if max_replay_length != -1 and i >= max_replay_length:
             break
 
         physical_game_state_entry = trace_entry.find('rts.PhysicalGameState')
@@ -117,6 +131,7 @@ def parse_replay_xml(filename: str, config: dict):
             allow_coordinates=allow_coordinates)
 
         is_graph = False
+        is_2d_text = False
         if config.state_representation == "graph":
             state = build_graph_state(unit_data_map)
             is_graph = True
@@ -124,6 +139,9 @@ def parse_replay_xml(filename: str, config: dict):
             state = build_simple_feature_vector_state(unit_data_map)
         elif config.state_representation == "image":
             state = build_image_state(height, width, arena_map_str, unit_data_map)
+        elif config.state_representation == "2d-text":
+            state = build_character_state(height, width, arena_map_str, unit_data_map)
+            is_2d_text = True
         else:
             raise ValueError(
                 f'Unknown state representation: {config.state_representation}')
@@ -131,7 +149,8 @@ def parse_replay_xml(filename: str, config: dict):
         __add_state_action(state,
                            pid_to_action,
                            player_to_trace,
-                           is_graph=is_graph)
+                           is_graph=is_graph,
+                           is_2d_text=is_2d_text)
 
     player_to_trace = [
         (pid, player_to_trace[pid]) for pid in player_ids]

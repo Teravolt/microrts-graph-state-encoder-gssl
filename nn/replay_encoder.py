@@ -8,6 +8,9 @@ from torch import nn
 from nn.state_encoder import GNNStateEncoder
 
 class GNNReplayEncoder(nn.Module):
+    """
+    Encode replay using GNN state encoder
+    """
 
     def __init__(self, node_in_dims: int, edge_in_dims: int, hidden_dims: int) -> None:
         super().__init__()
@@ -18,23 +21,26 @@ class GNNReplayEncoder(nn.Module):
         encoder_layer = nn.TransformerEncoderLayer(d_model=hidden_dims, nhead=1)
         self.replay_encoder = nn.TransformerEncoder(encoder_layer, num_layers=2)
 
-    # def forward(self, node_features: torch.Tensor,
-    #             edge_indices: torch.Tensor,
-    #             edge_weights: torch.Tensor,
-    #             batch: torch.Tensor=None):
-    #     """
-    #     Forward pass
-    #     """
+    def forward(self, node_features: torch.Tensor,
+                edge_indices: torch.Tensor,
+                edge_weights: torch.Tensor,
+                batch: torch.Tensor=None):
+        """
+        Forward pass
+        """
 
-    #     _, latent_states, _ = self.state_encoder(
-    #         node_features,
-    #         edge_indices,
-    #         edge_weights,
-    #         batch)
-     
-    #     = self.replay_encoder(latent_states)
+        _, latent_states, _ = self.state_encoder(
+            node_features,
+            edge_indices,
+            edge_weights,
+            batch)
 
-    #     print(f"Output shape: {output.shape}")
+        latent_states = latent_states.unsqueeze(0)
 
-    #     return output
-        
+        print(f"Latent states of nodes: {latent_states.shape}")
+
+        output = self.replay_encoder(latent_states)
+
+        print(f"Output shape: {output.shape}")
+
+        return output
