@@ -37,10 +37,10 @@ class GNNReplayEncoder(nn.Module):
 
         latent_states = latent_states.unsqueeze(0)
 
-        print(f"Latent states of nodes: {latent_states.shape}")
+        # print(f"Latent states of nodes: {latent_states.shape}")
 
         output = self.replay_encoder(latent_states)
 
-        print(f"Output shape: {output.shape}")
+        # print(f"Output shape: {output.shape}")
 
         return output
