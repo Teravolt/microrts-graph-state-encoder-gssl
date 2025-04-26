@@ -7,6 +7,8 @@ from argparse import Namespace
 
 from copy import deepcopy
 
+import numpy as np
+
 import torch
 from torch import optim
 import torch.nn.functional as F
@@ -77,36 +79,79 @@ def create_model(node_dims: int, edge_dims: int, hidden_dims: int, _config: Name
 
     return state_enc
 
-def compute_loss(graph_embedding_1: torch.Tensor, graph_embedding_2: torch.Tensor):
+def compute_loss(proj_embedding_s1: torch.Tensor, proj_embedding_s2: torch.Tensor,
+                 proj_embedding_t1: torch.Tensor, proj_embedding_t2: torch.Tensor,
+                 student_temp: torch.Tensor, teacher_temp: torch.Tensor):
     """
-    Compute SimCLR contrastive loss
+    Compute DINO contrastive loss
 
     :param graph_embedding_1: Embedding from first graph
     :param graph_embedding_1: Embedding from second graph
-    :returns: SimCLR loss between the two graph embeddings
+    :returns: DINO loss between the two graph embeddings
     """
 
-    batch_size = graph_embedding_1.shape[0]
+    # batch_size = proj_embedding_s1.shape[0]
 
     # Pairwise similarity
-    norm_graph_embedding_1 = F.normalize(graph_embedding_1, p=2, dim=1)
-    norm_graph_embedding_2 = F.normalize(graph_embedding_2, p=2, dim=1)
+    # norm_graph_embedding_1 = F.normalize(proj_embedding_s1, p=2, dim=1)
+    # norm_graph_embedding_2 = F.normalize(proj_embedding_s2, p=2, dim=1)
 
-    graph_embeddings = torch.concat(
-        [norm_graph_embedding_1, norm_graph_embedding_2], dim=0)
+    graph_softmax_s1 = F.softmax(proj_embedding_s1 / student_temp, dim=-1)
+    graph_softmax_s2 = F.softmax(proj_embedding_s2 / student_temp, dim=-1)
 
-    sim = torch.matmul(graph_embeddings, graph_embeddings.T)
-    sim = (1 - torch.eye(sim.shape[0]))*sim + 1e-8
+    graph_softmax_t1 = F.softmax(proj_embedding_t1 / teacher_temp, dim=-1)
+    graph_softmax_t2 = F.softmax(proj_embedding_t2 / teacher_temp, dim=-1)
 
-    row_softmax = torch.log_softmax(sim, dim=0)
-    col_softmax = torch.log_softmax(sim, dim=1)
+    # print(f"Graph softmax s1: {graph_softmax_s1.shape}")
+    # print(f"Graph softmax s2: {graph_softmax_s2.shape}")
 
-    loss = 0
-    for i in range(batch_size):
-        loss += (row_softmax[i, batch_size+i] + col_softmax[batch_size+i, i])
-    loss = loss / (2*batch_size)
+    loss_1 = -(graph_softmax_t1*torch.log(graph_softmax_s2)).sum(dim=1).mean()
+    loss_2 = -(graph_softmax_t2*torch.log(graph_softmax_s1)).sum(dim=1).mean()
+    loss = (loss_1 + loss_2)/2.0
 
-    return -loss
+    # graph_embeddings = torch.concat(
+    #     [norm_graph_embedding_1, norm_graph_embedding_2], dim=0)
+
+    # sim = torch.matmul(graph_embeddings, graph_embeddings.T)
+    # sim = (1 - torch.eye(sim.shape[0]))*sim + torch.eye(sim.shape[0])*-1e8
+    # sim = sim/0.5
+
+    # row_softmax = torch.log_softmax(sim, dim=0)
+    # # print(row_softmax)
+    # col_softmax = torch.log_softmax(sim, dim=1)
+    # # print(col_softmax)
+
+    # loss = 0
+    # for i in range(batch_size):
+    #     loss += (row_softmax[i, batch_size+i] + col_softmax[batch_size+i, i])
+    # loss = loss / (2*batch_size)
+
+    return loss
+
+def perturb_state(state, config: Namespace):
+    """
+    Preturb state randomly
+
+    :param state: State to perturb
+    :param config: Script config
+    :returns: Perturbed state
+    """
+
+    rand_val = torch.rand(1, generator=config.rng, device=config.device)
+    scale_diff = config.max_scale_factor-config.min_scale_factor
+    scale_factor = rand_val*(scale_diff)+(1.0-(scale_diff/2.0))
+
+    state.edge_attr[:, 0] = scale_factor*state.edge_attr[:, 0]
+
+    rotation_factor = 2*rand_val*np.pi
+
+    state.edge_attr[:, 1] += rotation_factor + state.edge_attr[:, 1]
+    state.edge_attr[:, 1] = torch.where(
+        state.edge_attr[:, 1] > 2*np.pi,
+        state.edge_attr[:, 1]-2*np.pi,
+        state.edge_attr[:, 1])
+
+    return state
 
 def training_loop(config: Namespace, debug_mode=False):
     """
@@ -185,27 +230,56 @@ def training_loop(config: Namespace, debug_mode=False):
         for _, batch in enumerate(dataloader):
 
             optimizer.zero_grad()
-            state, contrast_state = batch
-            perturbed_contrast_state = deepcopy(contrast_state)
+            state, _ = batch
 
-            rand_val = torch.rand(1, generator=config.rng, device=config.device)
-            scale_diff = config.max_scale_factor-config.min_scale_factor
-            scale_factor = rand_val*(scale_diff)+(1.0-(scale_diff/2.0))
-            perturbed_contrast_state.edge_attr[:, 0] = \
-                scale_factor*perturbed_contrast_state.edge_attr[:, 0]
+            state_1 = deepcopy(state)
+            state_2 = deepcopy(state)
 
-            _, graph_embedding_1, proj_embedding_1 = model(
-                state.x, state.edge_index, state.edge_attr,
-                state.batch)
+            # Perturb both states
+            perturbed_state_1 = perturb_state(state_1, config)
+            perturbed_state_2 = perturb_state(state_2, config)
+
+            # perturbed_contrast_state = deepcopy(contrast_state)
+
+            # rand_val = torch.rand(1, generator=config.rng, device=config.device)
+            # scale_diff = config.max_scale_factor-config.min_scale_factor
+            # scale_factor = rand_val*(scale_diff)+(1.0-(scale_diff/2.0))
+            # perturbed_contrast_state.edge_attr[:, 0] = \
+            #     scale_factor*perturbed_contrast_state.edge_attr[:, 0]
+
+            _, _, proj_embedding_s1 = model(
+                perturbed_state_1.x,
+                perturbed_state_1.edge_index,
+                perturbed_state_1.edge_attr,
+                perturbed_state_1.batch)
+
+            _, _, proj_embedding_s2 = model(
+                perturbed_state_2.x,
+                perturbed_state_2.edge_index,
+                perturbed_state_2.edge_attr,
+                perturbed_state_2.batch)
 
             with torch.no_grad():
-                _, graph_embedding_2, proj_embedding_2 = ema_model(
-                    perturbed_contrast_state.x,
-                    perturbed_contrast_state.edge_index,
-                    perturbed_contrast_state.edge_attr,
-                    state.batch)
+                _, _, proj_embedding_t1 = ema_model(
+                    perturbed_state_1.x,
+                    perturbed_state_1.edge_index,
+                    perturbed_state_1.edge_attr,
+                    perturbed_state_1.batch)
 
-            loss = compute_loss(proj_embedding_1, proj_embedding_2)
+                _, _, proj_embedding_t2 = ema_model(
+                    perturbed_state_2.x,
+                    perturbed_state_2.edge_index,
+                    perturbed_state_2.edge_attr,
+                    perturbed_state_2.batch)
+
+
+            loss = compute_loss(
+                proj_embedding_s1,
+                proj_embedding_s2,
+                proj_embedding_t1,
+                proj_embedding_t2,
+                config.student_temp,
+                config.teacher_temp)
 
             # accelerator.print(f"Loss: {loss.item()}")
             if accelerator:
@@ -224,9 +298,10 @@ def training_loop(config: Namespace, debug_mode=False):
                 print(f"Step loss: {loss.item()}")
 
             if num_steps % config.update_freq == 0:
+                # ema_model.load_state_dict(model.state_dict())
                 ema_state_dict = ema_model.state_dict()
                 for key, parameters in model.state_dict().items():
-                    ema_state_dict[key] = config.ema_alpha*parameters \
+                    ema_state_dict[key] = config.ema_alpha*ema_state_dict[key] \
                         + (1-config.ema_alpha)*parameters
                 ema_model.load_state_dict(ema_state_dict)
 
@@ -288,19 +363,19 @@ def get_config():
     # Training Config
     parser.add_argument("--batch_size", default=8, type=int,
                         help='Batch size')
-    parser.add_argument("--hidden_dims", default=128, type=int,
+    parser.add_argument("--hidden_dims", default=256, type=int,
                         help='Hidden dim size')
     parser.add_argument("--num_train_epochs", default=10, type=int,
                         help="Number of training epochs")
-    parser.add_argument("--learning_rate", default=4e-4, type=float,
+    parser.add_argument("--learning_rate", default=4e-7, type=float,
                         help='Optimizer learning rate')
     parser.add_argument("--lr_exp_schedule_gamma", default=0.99, type=float,
                         help="Gamma value for exponential lr scheduler")
     parser.add_argument("--lr_warmup_steps", default=1000, type=int,
                         help="Number of warmup steps for cosine scheduler")
-    parser.add_argument("--update_freq", default=100, type=int,
+    parser.add_argument("--update_freq", default=1, type=int,
                         help="Frequency to update siamese network")
-    parser.add_argument("--ema_alpha", default=0.99, type=float,
+    parser.add_argument("--ema_alpha", default=0.996, type=float,
                         help="Alpha value for Exponential Moving Average (EMA)")
     parser.add_argument('--grad_accumulation_steps', default=4, type=int,
                         help="Number of steps to accumulate gradients")
@@ -308,6 +383,9 @@ def get_config():
                         help="Mixed-precision training")
     parser.add_argument('--device', default=None, type=str,
                         help="Device to run model and training")
+    parser.add_argument('--debug_mode', action='store_true',
+                        help="Flag to turn on debugging mode.")
+
     # Model Config
     parser.add_argument("--model_name", default="microrts-gnn-state-encoder", type=str,
                         help="Name of model")
@@ -321,9 +399,9 @@ def get_config():
                         type=str, help="Name of run on W&Bs")
 
     # Data Augmentation Config
-    parser.add_argument("--min_scale_factor", default=0.8, type=float,
+    parser.add_argument("--min_scale_factor", default=0.5, type=float,
                         help="Minimum distance scaling factor")
-    parser.add_argument("--max_scale_factor", default=1.2, type=float,
+    parser.add_argument("--max_scale_factor", default=1.5, type=float,
                         help="Maximum distance scaling factor")
 
     config = parser.parse_args()
@@ -337,6 +415,11 @@ def get_config():
     config.alpha = [0.99, 0.99]
     config.theta = [0.99, 0.99]
 
+    config.student_temp = torch.tensor(0.1)
+    config.teacher_temp = torch.tensor(0.04)
+
+    config.frame_skip_freq = 5 # (avg. movement frames is 10)
+
     config.ignore_players = ['0']
 
     config.rng = torch.Generator(config.device).manual_seed(config.seed)
@@ -349,7 +432,7 @@ def main():
     """
 
     config = get_config()
-    training_loop(config, debug_mode=False)
+    training_loop(config, debug_mode=config.debug_mode)
 
 if __name__ == "__main__":
     main()
