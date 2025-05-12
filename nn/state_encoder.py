@@ -16,7 +16,7 @@ class GNNStateEncoder(nn.Module):
     def __init__(self, node_in_dims: int, edge_in_dims: int, hidden_dims: int) -> None:
         super().__init__()
 
-        # self.layer_norm = nn.LayerNorm(node_in_dims)
+        self.layer_norm = nn.LayerNorm(node_in_dims)
         self.node_linear_1 = nn.Linear(node_in_dims, hidden_dims)
 
         self.gnn_layer_1 = GATv2Conv(
@@ -36,7 +36,6 @@ class GNNStateEncoder(nn.Module):
         #     hidden_dims,
         #     edge_dim=edge_in_dims)
 
-        # Used for SimCLR objective
         self.projection_1 = nn.Linear(hidden_dims, hidden_dims)
         self.projection_2 = nn.Linear(hidden_dims, hidden_dims)
 
@@ -48,9 +47,10 @@ class GNNStateEncoder(nn.Module):
         Forward pass
         """
 
+        node_out = self.layer_norm(x)
         # print(f"Input dimensions: {x.shape}")
         # node_out = self.layer_norm(x)
-        node_out = self.node_linear_1(x)
+        node_out = self.node_linear_1(node_out)
         node_out = F.relu(node_out)
         # edge_out = self.edge_linear_1(edge_weights)
 

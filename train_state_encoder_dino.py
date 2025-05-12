@@ -32,7 +32,8 @@ def prepare_dataloader(config: Namespace):
     Prepare dataloader
 
     :param config: Script config
-    :returns Dataloader for state dataset, node dimensions, and edge dimensions
+    :returns Dataloader for state dataset, node dimensions,
+             and edge dimensions
     """
 
     replay_data = parse_replay_dataset(config)
@@ -45,26 +46,27 @@ def prepare_dataloader(config: Namespace):
         _, players, *_ = filename.split('.')
         player_1, _, player_2, *_ = players.split('-')
         players = [player_1, player_2]
+
         if players[pid] in config.ignore_players:
             # Don't add player data to dataset
-            # print(filename, players, players[pid])
             continue
 
         for state, _ in trace:
 
-            contrast_state = deepcopy(state)
             if node_dims == -1:
                 node_dims = state.x.shape[-1]
 
             if edge_dims == -1:
                 edge_dims = state.edge_attr.shape[-1]
 
-            dataset.append((state, contrast_state))
+            dataset.append(state)
 
-    return DataLoader(dataset, batch_size=config.batch_size, generator=config.rng, shuffle=True), \
-        node_dims, edge_dims
+    loader = DataLoader(dataset, batch_size=config.batch_size,
+                        generator=config.rng, shuffle=True)
+    return loader, node_dims, edge_dims
 
-def create_model(node_dims: int, edge_dims: int, hidden_dims: int, _config: Namespace):
+def create_model(node_dims: int, edge_dims: int, hidden_dims: int,
+                 _config: Namespace):
     """
     Create model
 
@@ -85,8 +87,12 @@ def compute_loss(proj_embedding_s1: torch.Tensor, proj_embedding_s2: torch.Tenso
     """
     Compute DINO contrastive loss
 
-    :param graph_embedding_1: Embedding from first graph
-    :param graph_embedding_1: Embedding from second graph
+    :param proj_embedding_s1: Projection from student for graph 1
+    :param proj_embedding_s2: Projection from student for graph 2
+    :param proj_embedding_t1: Projection from teacher for graph 1
+    :param proj_embedding_t2: Projection from teacher for graph 2
+    :param student_temp: Student temperature
+    :param teacher_temp: Teacher temperature
     :returns: DINO loss between the two graph embeddings
     """
 
@@ -109,23 +115,6 @@ def compute_loss(proj_embedding_s1: torch.Tensor, proj_embedding_s2: torch.Tenso
     loss_2 = -(graph_softmax_t2*torch.log(graph_softmax_s1)).sum(dim=1).mean()
     loss = (loss_1 + loss_2)/2.0
 
-    # graph_embeddings = torch.concat(
-    #     [norm_graph_embedding_1, norm_graph_embedding_2], dim=0)
-
-    # sim = torch.matmul(graph_embeddings, graph_embeddings.T)
-    # sim = (1 - torch.eye(sim.shape[0]))*sim + torch.eye(sim.shape[0])*-1e8
-    # sim = sim/0.5
-
-    # row_softmax = torch.log_softmax(sim, dim=0)
-    # # print(row_softmax)
-    # col_softmax = torch.log_softmax(sim, dim=1)
-    # # print(col_softmax)
-
-    # loss = 0
-    # for i in range(batch_size):
-    #     loss += (row_softmax[i, batch_size+i] + col_softmax[batch_size+i, i])
-    # loss = loss / (2*batch_size)
-
     return loss
 
 def perturb_state(state, config: Namespace):
@@ -138,14 +127,15 @@ def perturb_state(state, config: Namespace):
     """
 
     rand_val = torch.rand(1, generator=config.rng, device=config.device)
+
+    # Perturbation 1: Scale
     scale_diff = config.max_scale_factor-config.min_scale_factor
     scale_factor = rand_val*(scale_diff)+(1.0-(scale_diff/2.0))
-
     state.edge_attr[:, 0] = scale_factor*state.edge_attr[:, 0]
 
+    # Perturbation 2: Rotation
     rotation_factor = 2*rand_val*np.pi
-
-    state.edge_attr[:, 1] += rotation_factor + state.edge_attr[:, 1]
+    state.edge_attr[:, 1] += rotation_factor
     state.edge_attr[:, 1] = torch.where(
         state.edge_attr[:, 1] > 2*np.pi,
         state.edge_attr[:, 1]-2*np.pi,
@@ -176,10 +166,11 @@ def training_loop(config: Namespace, debug_mode=False):
             cpu=(config.device == 'cpu'))
 
     dataloader, node_dims, edge_dims = prepare_dataloader(config)
-    model = create_model(node_dims, edge_dims, config.hidden_dims, config)
-    ema_model = deepcopy(model)
+    student_model = create_model(node_dims, edge_dims, config.hidden_dims, config)
+    teacher_model = deepcopy(student_model)
 
-    optimizer = optim.AdamW(model.parameters(), lr=config.learning_rate)
+    optimizer = optim.AdamW(student_model.parameters(),
+                            lr=config.learning_rate)
 
 # #     scheduler = CosineAnnealingLR(
 # #         optimizer,
@@ -197,8 +188,8 @@ def training_loop(config: Namespace, debug_mode=False):
         # last_epoch=config.num_train_epochs*len(train_dataloader))
 
     if accelerator:
-        model, optimizer, dataloader, scheduler \
-            = accelerator.prepare(model, optimizer, dataloader, scheduler)
+        student_model, optimizer, dataloader, scheduler \
+            = accelerator.prepare(student_model, optimizer, dataloader, scheduler)
 
     wandb_run = None
     if not debug_mode:
@@ -220,7 +211,7 @@ def training_loop(config: Namespace, debug_mode=False):
 
     num_steps = 0
     for epoch in range(config.num_train_epochs):
-        model.train()
+        student_model.train()
 
         print(f"Epoch {epoch}")
 
@@ -230,10 +221,9 @@ def training_loop(config: Namespace, debug_mode=False):
         for _, batch in enumerate(dataloader):
 
             optimizer.zero_grad()
-            state, _ = batch
 
-            state_1 = deepcopy(state)
-            state_2 = deepcopy(state)
+            state_1 = deepcopy(batch)
+            state_2 = deepcopy(batch)
 
             # Perturb both states
             perturbed_state_1 = perturb_state(state_1, config)
@@ -247,31 +237,30 @@ def training_loop(config: Namespace, debug_mode=False):
             # perturbed_contrast_state.edge_attr[:, 0] = \
             #     scale_factor*perturbed_contrast_state.edge_attr[:, 0]
 
-            _, _, proj_embedding_s1 = model(
+            _, _, proj_embedding_s1 = student_model(
                 perturbed_state_1.x,
                 perturbed_state_1.edge_index,
                 perturbed_state_1.edge_attr,
                 perturbed_state_1.batch)
 
-            _, _, proj_embedding_s2 = model(
+            _, _, proj_embedding_s2 = student_model(
                 perturbed_state_2.x,
                 perturbed_state_2.edge_index,
                 perturbed_state_2.edge_attr,
                 perturbed_state_2.batch)
 
             with torch.no_grad():
-                _, _, proj_embedding_t1 = ema_model(
+                _, _, proj_embedding_t1 = teacher_model(
                     perturbed_state_1.x,
                     perturbed_state_1.edge_index,
                     perturbed_state_1.edge_attr,
                     perturbed_state_1.batch)
 
-                _, _, proj_embedding_t2 = ema_model(
+                _, _, proj_embedding_t2 = teacher_model(
                     perturbed_state_2.x,
                     perturbed_state_2.edge_index,
                     perturbed_state_2.edge_attr,
                     perturbed_state_2.batch)
-
 
             loss = compute_loss(
                 proj_embedding_s1,
@@ -284,10 +273,10 @@ def training_loop(config: Namespace, debug_mode=False):
             # accelerator.print(f"Loss: {loss.item()}")
             if accelerator:
                 accelerator.backward(loss)
-                accelerator.clip_grad_norm_(model.parameters(), 1.0)
+                accelerator.clip_grad_norm_(student_model.parameters(), 1.0)
             else:
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                torch.nn.utils.clip_grad_norm_(student_model.parameters(), 1.0)
 
             epoch_loss += loss.item()
 
@@ -299,11 +288,11 @@ def training_loop(config: Namespace, debug_mode=False):
 
             if num_steps % config.update_freq == 0:
                 # ema_model.load_state_dict(model.state_dict())
-                ema_state_dict = ema_model.state_dict()
-                for key, parameters in model.state_dict().items():
-                    ema_state_dict[key] = config.ema_alpha*ema_state_dict[key] \
+                teacher_state_dict = teacher_model.state_dict()
+                for key, parameters in student_model.state_dict().items():
+                    teacher_state_dict[key] = config.ema_alpha*teacher_state_dict[key] \
                         + (1-config.ema_alpha)*parameters
-                ema_model.load_state_dict(ema_state_dict)
+                teacher_model.load_state_dict(teacher_state_dict)
 
             num_steps += 1
             num_iters += 1
@@ -324,7 +313,7 @@ def training_loop(config: Namespace, debug_mode=False):
     if config.save_model:
         # Save model to W&Bs
 
-        torch.save(model.state_dict(), config.save_model)
+        torch.save(student_model.state_dict(), config.save_model)
         if wandb_run:
             model_art = wandb.Artifact(config.model_name, type='model')
             model_art.add_file(config.save_model)
@@ -359,6 +348,8 @@ def get_config():
     parser.add_argument('--max_replay_length', default=-1, type=int,
                         help='Maximum replay length')
     parser.add_argument('--seed', default=1, type=int, help='Random seed')
+    parser.add_argument('--frame_skip_freq', default=5, type=int,
+                        help='Number of frames to skip')
 
     # Training Config
     parser.add_argument("--batch_size", default=8, type=int,
@@ -404,6 +395,11 @@ def get_config():
     parser.add_argument("--max_scale_factor", default=1.5, type=float,
                         help="Maximum distance scaling factor")
 
+    parser.add_argument("--student_temp", default=0.1, type=float,
+                        help="Student temperature initial value")
+    parser.add_argument("--teacher_temp", default=0.04, type=float,
+                        help="Teacher temperature initial value")
+
     config = parser.parse_args()
 
     if config.device is None:
@@ -411,15 +407,16 @@ def get_config():
             'cuda' if torch.cuda.is_available() \
                 else 'mps' if torch.backends.mps.is_available() else 'cpu')
 
-
     config.alpha = [0.99, 0.99]
     config.theta = [0.99, 0.99]
 
-    config.student_temp = torch.tensor(0.1)
-    config.teacher_temp = torch.tensor(0.04)
+    # DINO temperature parameters
+    config.student_temp = torch.tensor(config.student_temp)
+    config.teacher_temp = torch.tensor(config.teacher_temp)
 
-    config.frame_skip_freq = 5 # (avg. movement frames is 10)
+    # config.frame_skip_freq = 5 # (avg. movement frames is 10)
 
+    # Ignore RandomAI - Not really useful for training a model
     config.ignore_players = ['0']
 
     config.rng = torch.Generator(config.device).manual_seed(config.seed)
