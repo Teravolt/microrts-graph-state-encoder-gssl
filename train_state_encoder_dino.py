@@ -14,6 +14,7 @@ from torch import optim
 import torch.nn.functional as F
 
 from torch_geometric.loader import DataLoader
+from torch_geometric.utils import dropout_edge
 
 from accelerate import Accelerator
 from accelerate.utils import GradientAccumulationPlugin
@@ -140,6 +141,11 @@ def perturb_state(state, config: Namespace):
         state.edge_attr[:, 1] > 2*np.pi,
         state.edge_attr[:, 1]-2*np.pi,
         state.edge_attr[:, 1])
+
+    # Perturbation 3: Drop edges
+    edge_index, edge_mask = dropout_edge(state.edge_index)
+    state.edge_index = edge_index
+    state.edge_attr = state.edge_attr[edge_mask, :]
 
     return state
 
