@@ -15,7 +15,6 @@ import numpy as np
 from tqdm import tqdm
 
 from replay_parser.action import create_unit_actions
-from replay_parser.action import UNIT_ACTION_LIST
 from replay_parser.action import create_one_hot_unit_actions
 from replay_parser.state import build_simple_feature_vector_state, \
     build_image_state, build_graph_state, build_character_state
@@ -25,6 +24,7 @@ from replay_parser.utils.log_utils import LoggingUtils
 def __add_state_action(state,
                        pid_to_action: dict,
                        player_to_trace: dict,
+                       unit_actions_to_ignore: list,
                        is_graph=False,
                        is_2d_text=False):
     """
@@ -47,6 +47,11 @@ def __add_state_action(state,
                 if i == label:
                     player_state.x[j, -1] = 1
                     player_unit_mask[j] = 1
+
+            for j, action in enumerate(player_state.unit_actions):
+                if str(int(action)) in unit_actions_to_ignore:
+                    player_unit_mask[j] = 0
+
             player_state.player_unit_mask = player_unit_mask
 
             player_action = None if i not in pid_to_action else pid_to_action[i]
@@ -155,6 +160,7 @@ def parse_replay_xml(filename: str, config: dict):
         __add_state_action(state,
                            pid_to_action,
                            player_to_trace,
+                           unit_actions_to_ignore,
                            is_graph=is_graph,
                            is_2d_text=is_2d_text)
 

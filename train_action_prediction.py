@@ -5,9 +5,12 @@ Evaluate state encoder for action prediction
 import argparse
 from argparse import Namespace
 
+import pandas as pd
+
 import torch
-from torch import optim
 import torch.nn.functional as F
+from torch import optim
+from torch.utils.data import random_split
 
 from torch_geometric.loader import DataLoader
 
@@ -41,7 +44,8 @@ def prepare_dataloader(config: Namespace):
 
     dataset = []
     for filename, pid, trace in replay_data:
-        _, players, *_ = filename.split('.')
+        _, players, _, map_id = filename.split('.')
+        _, _, map_id = map_id.split('-')
         player_1, _, player_2, *_ = players.split('-')
         players = [player_1, player_2]
 
@@ -60,15 +64,26 @@ def prepare_dataloader(config: Namespace):
             if actions is None:
                 continue
 
-            state.unit_actions = torch.tensor(state.unit_actions)
+            state.unit_actions = torch.tensor(state.unit_actions, dtype=torch.long)
             state.player_unit_mask = torch.tensor(state.player_unit_mask,
                                                   dtype=torch.bool)
+            state.pid = pid
+            state.map_id = map_id
 
             dataset.append(state)
 
-    loader = DataLoader(dataset, batch_size=config.batch_size,
-                        generator=config.rng, shuffle=True)
-    return loader, node_dims, edge_dims
+    train_dataset, val_dataset = random_split(
+        dataset, [config.train_val_split, 1.0-config.train_val_split],
+        generator=config.rng)
+
+    # assert len(train_dataset) == train_size
+    # assert len(val_dataset) == val_size
+
+    train_loader = DataLoader(train_dataset, batch_size=config.batch_size,
+                              generator=config.rng, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=1, generator=config.rng, shuffle=False)
+
+    return train_loader, val_loader, node_dims, edge_dims
 
 def create_model(node_dims: int, edge_dims: int,
                  hidden_dims: int, num_actions: int,
@@ -88,6 +103,9 @@ def create_model(node_dims: int, edge_dims: int,
     if config.state_model is not None:
         model_dict = torch.load(config.state_model)
         state_enc.load_state_dict(model_dict)
+        # Freeze model
+        for param in state_enc.parameters():
+            param.requires_grad = False
 
     action_predictor = ActionPredictor(state_enc, hidden_dims, num_actions)
     return action_predictor
@@ -95,25 +113,85 @@ def create_model(node_dims: int, edge_dims: int,
 def compute_loss(pred_logits: torch.Tensor, gt_unit_actions: torch.Tensor,
                  player_unit_mask: torch.Tensor):
     """
-    Compute DINO contrastive loss
+    Compute cross-entropy loss
 
-    :param proj_embedding_s1: Projection from student for graph 1
-    :param proj_embedding_s2: Projection from student for graph 2
-    :param proj_embedding_t1: Projection from teacher for graph 1
-    :param proj_embedding_t2: Projection from teacher for graph 2
-    :param student_temp: Student temperature
-    :param teacher_temp: Teacher temperature
-    :returns: DINO loss between the two graph embeddings
+    :param pred_logits: Predicted actions per unit
+    :param gt_unit_actions: Ground truth actions per unit
+    :param player_unit_mask: Mask for player units
+    :returns: Cross-entropy loss 
     """
 
     pred_logits_ = pred_logits[player_unit_mask, :]
-    gt_unit_actions_ = gt_unit_actions[player_unit_mask, :]
+    gt_unit_actions_ = gt_unit_actions[player_unit_mask]
 
     # print(f"Pred actions: {pred_logits.shape} - {pred_logits_.shape}")
     # print(f"GT actions: {gt_unit_actions.shape} - {gt_unit_actions_.shape}")
-    loss = F.binary_cross_entropy_with_logits(pred_logits_, gt_unit_actions_)
+    loss = F.cross_entropy(pred_logits_, gt_unit_actions_)
 
     return loss
+
+@torch.no_grad()
+def eval_loop(epoch: int, model, dataloader, wandb_run):
+    """
+    Evaluation loop
+    """
+
+    players = []
+    maps = []
+    accuracy = []
+    # predictions = []
+    # ground_truths = []
+
+    avg_loss = 0
+    avg_accuracy = 0
+    for _, batch in enumerate(dataloader):
+
+        pred_logits = model(batch)
+        gt_unit_actions = batch.unit_actions
+        player_unit_mask = batch.player_unit_mask
+
+        pred_logits_ = pred_logits[player_unit_mask, :]
+        gt_unit_actions_ = gt_unit_actions[player_unit_mask]
+        preds = torch.argmax(pred_logits_, dim=-1)
+
+        # print(f"Predictions: {preds} - Ground truth: {gt_unit_actions_}")
+
+        loss = compute_loss(pred_logits, gt_unit_actions, player_unit_mask)
+        avg_loss += loss.item()
+
+        per_batch_accuracy = (preds == gt_unit_actions_).double().mean()
+        # print(f"Per-batch accuracy: {per_batch_accuracy}")
+        avg_accuracy += per_batch_accuracy
+
+        players += batch.pid
+        maps += batch.map_id
+        accuracy += [per_batch_accuracy for _ in range(len(batch.pid))]
+        # predictions += preds.tolist()
+        # ground_truths += gt_unit_actions_.tolist()
+
+    dataframe = {
+        'player': players,
+        'map': maps,
+        'accuracy': accuracy
+        # 'prediction': predictions,
+        # 'ground_truth': ground_truths,
+        }
+
+    dataframe = pd.DataFrame(dataframe)
+    dataframe['epoch'] = epoch
+
+    avg_accuracy = avg_accuracy/len(dataloader)
+    avg_loss = avg_loss/len(dataloader)
+    # print(f"Average accuracy: {avg_accuracy}")
+
+    if wandb_run:
+        # table = wandb.Table(data=dataframe)
+        wandb_run.log({'accuracy': avg_accuracy}, commit=False)
+        wandb_run.log({'val-loss': avg_loss}, commit=False)
+        # wandb_run.log({'val-table': table})
+    else:
+        print(f"Validation loss: {avg_loss}")
+        print(f"Validation accuracy across {len(dataloader)} datapoints: {avg_accuracy}")
 
 def training_loop(config: Namespace, debug_mode=False):
     """
@@ -137,7 +215,7 @@ def training_loop(config: Namespace, debug_mode=False):
             gradient_accumulation_plugin=grad_accumulation_plugin,
             cpu=(config.device == 'cpu'))
 
-    dataloader, node_dims, edge_dims = prepare_dataloader(config)
+    train_dataloader, val_dataloader, node_dims, edge_dims = prepare_dataloader(config)
     action_pred_model = create_model(node_dims, edge_dims,
                                      config.hidden_dims, len(UNIT_ACTION_LIST),
                                      config)
@@ -146,11 +224,12 @@ def training_loop(config: Namespace, debug_mode=False):
                             lr=config.learning_rate)
 
     scheduler = get_cosine_schedule_with_warmup(
-        optimizer, config.lr_warmup_steps, len(dataloader)*config.num_train_epochs)
+        optimizer, config.lr_warmup_steps, len(train_dataloader)*config.num_train_epochs)
 
     if accelerator:
-        action_pred_model, optimizer, dataloader, scheduler \
-            = accelerator.prepare(action_pred_model, optimizer, dataloader, scheduler)
+        action_pred_model, optimizer, train_dataloader, val_dataloader, scheduler \
+            = accelerator.prepare(action_pred_model, optimizer,
+                                  train_dataloader, val_dataloader, scheduler)
 
     wandb_run = None
     if not debug_mode:
@@ -179,7 +258,7 @@ def training_loop(config: Namespace, debug_mode=False):
         epoch_loss = 0
         num_iters = 0
 
-        for _, batch in enumerate(dataloader):
+        for _, batch in enumerate(train_dataloader):
 
             optimizer.zero_grad()
 
@@ -213,8 +292,8 @@ def training_loop(config: Namespace, debug_mode=False):
             scheduler.step()
 
         # Validate model
-        # accelerator.print("Evaluating model")
-        # eval_loop(epoch, model, val_dataloader, wandb_run)
+        print("Evaluating model....")
+        eval_loop(epoch, action_pred_model, val_dataloader, wandb_run)
 
         if wandb_run:
             wandb_run.log({'training_step': num_steps, 'epoch_loss': epoch_loss/num_iters})
@@ -270,11 +349,11 @@ def get_config():
                         help='Hidden dim size')
     parser.add_argument("--num_train_epochs", default=10, type=int,
                         help="Number of training epochs")
-    parser.add_argument("--learning_rate", default=4e-7, type=float,
+    parser.add_argument("--learning_rate", default=4e-3, type=float,
                         help='Optimizer learning rate')
     parser.add_argument("--lr_exp_schedule_gamma", default=0.99, type=float,
                         help="Gamma value for exponential lr scheduler")
-    parser.add_argument("--lr_warmup_steps", default=1000, type=int,
+    parser.add_argument("--lr_warmup_steps", default=500, type=int,
                         help="Number of warmup steps for cosine scheduler")
     parser.add_argument('--grad_accumulation_steps', default=4, type=int,
                         help="Number of steps to accumulate gradients")
@@ -284,6 +363,8 @@ def get_config():
                         help="Device to run model and training")
     parser.add_argument('--debug_mode', action='store_true',
                         help="Flag to turn on debugging mode.")
+    parser.add_argument('--train_val_split', default=0.9, type=float,
+                        help="Percentage of dataset used for training.")
 
     # Model Config
     parser.add_argument("--model_name", default="action-predictor", type=str,

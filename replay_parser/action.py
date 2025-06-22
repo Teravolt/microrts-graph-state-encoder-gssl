@@ -74,11 +74,11 @@ def create_one_hot_unit_actions(pid_to_player_action: dict, unit_data_map: dict)
 
     :param pid_to_player_action: Player actions
     :param unit_data_map: Information about each unit
-    :returns: UxA matrix, where U is the number of units in the state
+    :returns: Vector of size U, where U is the number of units in the state
     and A is the number of unit actions
     """
 
-    unit_actions = np.zeros((len(unit_data_map), len(UNIT_ACTION_LIST)))
+    unit_actions = np.zeros(len(unit_data_map))
 
     unit_id_to_action = {}
     for _, player_action in pid_to_player_action.items():
@@ -89,10 +89,10 @@ def create_one_hot_unit_actions(pid_to_player_action: dict, unit_data_map: dict)
                 unit_id_to_action[unit_id] = name
 
     # Add one-hot encoding of actions per unit
-    # NOTE: Resources will have the "idle" action
+    # NOTE: Resources and ignored actions will have the "idle" action
     for j, (unit_id, _) in enumerate(unit_data_map.items()):
         name = 'idle' if unit_id not in unit_id_to_action \
             else unit_id_to_action[unit_id]
-        unit_actions[j, UNIT_ACTION_LIST.index(name)] = 1
+        unit_actions[j] = UNIT_ACTION_LIST.index(name)
 
     return unit_actions
