@@ -1,5 +1,5 @@
 """
-Evaluate state encoder for action prediction
+Train action prediction model
 """
 
 import argparse
