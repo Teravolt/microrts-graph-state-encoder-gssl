@@ -15,6 +15,8 @@ import numpy as np
 from tqdm import tqdm
 
 from replay_parser.action import create_unit_actions
+from replay_parser.action import UNIT_ACTION_LIST
+from replay_parser.action import create_one_hot_unit_actions
 from replay_parser.state import build_simple_feature_vector_state, \
     build_image_state, build_graph_state, build_character_state
 
@@ -40,12 +42,15 @@ def __add_state_action(state,
                 player_to_trace[i] = []
 
             player_state = deepcopy(state)
+            player_unit_mask = np.zeros(player_state.x.shape[0])
             for j, label in enumerate(player_state.labels):
                 if i == label:
                     player_state.x[j, -1] = 1
+                    player_unit_mask[j] = 1
+            player_state.player_unit_mask = player_unit_mask
 
-            action = None if i not in pid_to_action else pid_to_action[i]
-            player_to_trace[i].append((player_state, action))
+            player_action = None if i not in pid_to_action else pid_to_action[i]
+            player_to_trace[i].append((player_state, player_action))
     elif is_2d_text:
         for i in range(state.shape[0]):
             if i not in player_to_trace:
@@ -134,6 +139,7 @@ def parse_replay_xml(filename: str, config: dict):
         is_2d_text = False
         if config.state_representation == "graph":
             state = build_graph_state(unit_data_map)
+            state.unit_actions = create_one_hot_unit_actions(pid_to_action, unit_data_map)
             is_graph = True
         elif config.state_representation == "feature":
             state = build_simple_feature_vector_state(unit_data_map)

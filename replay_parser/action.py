@@ -1,6 +1,8 @@
 """
-Convert unit and player actions found in the replays into symbolic actions
+Unit or player action representations
 """
+
+import numpy as np
 
 UNIT_ACTION_ID_TO_NAME = {'0': 'idle', '1': 'move', '2': 'harvest',
                           '3': 'return', '4': 'produce', '5': 'attack'}
@@ -43,7 +45,8 @@ def create_unit_actions(trace_entry, unit_data_map: dict,
         unit_name = f"{unit_name}{unit_id}"
 
         parameters = {
-            'unit-name': unit_name
+            'unit-name': unit_name,
+            'unit-id': unit_id
             }
 
         if 'x' in unit_action.attrib.keys() and 'y' in unit_action.attrib.keys() \
@@ -63,3 +66,33 @@ def create_unit_actions(trace_entry, unit_data_map: dict,
         pid_to_unit_action_list[player_id].append((act_name, parameters))
 
     return pid_to_unit_action_list
+
+
+def create_one_hot_unit_actions(pid_to_player_action: dict, unit_data_map: dict):
+    """
+    Create one hot encoding of actions per unit
+
+    :param pid_to_player_action: Player actions
+    :param unit_data_map: Information about each unit
+    :returns: UxA matrix, where U is the number of units in the state
+    and A is the number of unit actions
+    """
+
+    unit_actions = np.zeros((len(unit_data_map), len(UNIT_ACTION_LIST)))
+
+    unit_id_to_action = {}
+    for _, player_action in pid_to_player_action.items():
+        if player_action is not None:
+            for action in player_action:
+                name, parameters = action
+                unit_id = parameters['unit-id']
+                unit_id_to_action[unit_id] = name
+
+    # Add one-hot encoding of actions per unit
+    # NOTE: Resources will have the "idle" action
+    for j, (unit_id, _) in enumerate(unit_data_map.items()):
+        name = 'idle' if unit_id not in unit_id_to_action \
+            else unit_id_to_action[unit_id]
+        unit_actions[j, UNIT_ACTION_LIST.index(name)] = 1
+
+    return unit_actions
