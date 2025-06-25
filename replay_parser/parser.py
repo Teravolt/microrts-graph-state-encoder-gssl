@@ -91,6 +91,7 @@ def parse_replay_xml(filename: str, config: dict):
     unit_actions_to_ignore = config.unit_actions_to_ignore
     max_replay_length = config.max_replay_length
     frame_skip_freq = config.frame_skip_freq
+    frame_number_start = config.frame_number_start
 
     player_to_trace = {}
     player_ids = []
@@ -111,26 +112,24 @@ def parse_replay_xml(filename: str, config: dict):
     # player_action_data['type_list'] = {}
     # player_action_data['duplicate_index'] = 0
 
-    for i, trace_entry in enumerate(root.find('entries')):
-        # Assuming each entry here is a frame
-        if i % frame_skip_freq != 0:
-            continue
+    entries = root.find('entries')
+    # Do not offset frames if the total number of available
+    # frames is less than the requested number of frames
+    num_frames = max_replay_length*frame_skip_freq
+    start_frame = 0
+    if num_frames < len(entries):
+        start_frame = len(entries)-num_frames
+        if frame_number_start > 0:
+            start_frame = min(start_frame, frame_number_start)
 
-        if max_replay_length != -1 and i >= max_replay_length:
-            break
+    # print(f"Starting frames at {start_frame}. Total number of frames: {len(entries)}")
+    # print(f"Requested number of frames: {num_frames}")
+    # print(f"Filename: {filename}")
+    unit_id_to_action = {}
+    players_found = False
+    for i, trace_entry in enumerate(entries):
 
         physical_game_state_entry = trace_entry.find('rts.PhysicalGameState')
-        width = int(physical_game_state_entry.attrib['width'])
-        height = int(physical_game_state_entry.attrib['height'])
-
-        arena_map_str = physical_game_state_entry.find("terrain").text
-
-        players_entry = physical_game_state_entry.find('players')
-        for entry in players_entry:
-            if entry.attrib['ID'] not in player_ids and entry.attrib['ID'] != '-1':
-                if int(entry.attrib['ID']) not in player_ids:
-                    player_ids.append(int(entry.attrib['ID']))
-
         unit_data_map = {}
         for unit in physical_game_state_entry.find('units'):
             unit_data_map[unit.attrib['ID']] = unit.attrib
@@ -140,11 +139,41 @@ def parse_replay_xml(filename: str, config: dict):
             unit_actions_to_ignore,
             allow_coordinates=allow_coordinates)
 
+        for _, player_action in pid_to_action.items():
+            if player_action is not None:
+                for action in player_action:
+                    name, parameters = action
+                    unit_id = parameters['unit-id']
+                    unit_id_to_action[unit_id] = name
+
+        if i < start_frame:
+            continue
+
+        if (i-start_frame) % frame_skip_freq != 0:
+            continue
+
+        if max_replay_length != -1 and (i-start_frame) >= max_replay_length:
+            break
+
+        # Information for state construction
+        width = int(physical_game_state_entry.attrib['width'])
+        height = int(physical_game_state_entry.attrib['height'])
+        arena_map_str = physical_game_state_entry.find("terrain").text
+
+        if not players_found:
+            players_entry = physical_game_state_entry.find('players')
+            for entry in players_entry:
+                if entry.attrib['ID'] not in player_ids and entry.attrib['ID'] != '-1':
+                    if int(entry.attrib['ID']) not in player_ids:
+                        player_ids.append(int(entry.attrib['ID']))
+            players_found = True
+
         is_graph = False
         is_2d_text = False
         if config.state_representation == "graph":
             state = build_graph_state(unit_data_map)
-            state.unit_actions = create_one_hot_unit_actions(pid_to_action, unit_data_map)
+            state.unit_actions = create_one_hot_unit_actions(
+                unit_id_to_action, unit_data_map)
             is_graph = True
         elif config.state_representation == "feature":
             state = build_simple_feature_vector_state(unit_data_map)

@@ -25,8 +25,7 @@ import wandb
 from replay_parser.parser import parse_replay_dataset
 from replay_parser.action import UNIT_ACTION_LIST
 
-from nn.state_encoder import GNNStateEncoder
-from nn.action_predictor import ActionPredictorGNN
+from nn.action_predictor import ActionPredictor
 
 def prepare_dataloader(config: Namespace):
     """
@@ -85,9 +84,9 @@ def prepare_dataloader(config: Namespace):
 
     return train_loader, val_loader, node_dims, edge_dims
 
-def create_model(node_dims: int, edge_dims: int,
+def create_model(node_dims: int, _edge_dims: int,
                  hidden_dims: int, num_actions: int,
-                 config: Namespace):
+                 _config: Namespace):
     """
     Create action prediction model
 
@@ -99,16 +98,7 @@ def create_model(node_dims: int, edge_dims: int,
     :returns: Action prediction model
     """
 
-    state_enc = GNNStateEncoder(node_dims, edge_dims, hidden_dims)
-    if config.state_model is not None:
-        model_dict = torch.load(config.state_model)
-        state_enc.load_state_dict(model_dict)
-        if not config.fine_tune:
-            # Freeze state encoder parameters
-            for param in state_enc.parameters():
-                param.requires_grad = False
-
-    action_predictor = ActionPredictorGNN(state_enc, hidden_dims, num_actions)
+    action_predictor = ActionPredictor(node_dims, hidden_dims, num_actions)
     return action_predictor
 
 def compute_loss(pred_logits: torch.Tensor, gt_unit_actions: torch.Tensor,

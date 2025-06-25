@@ -36,8 +36,11 @@ class GNNStateEncoder(nn.Module):
         #     hidden_dims,
         #     edge_dim=edge_in_dims)
 
-        self.projection_1 = nn.Linear(hidden_dims, hidden_dims)
-        self.projection_2 = nn.Linear(hidden_dims, hidden_dims)
+        self.graph_projection_1 = nn.Linear(hidden_dims, hidden_dims)
+        self.graph_projection_2 = nn.Linear(hidden_dims, hidden_dims)
+
+        # self.node_projection_1 = nn.Linear(hidden_dims, hidden_dims)
+        # self.node_projection_2 = nn.Linear(hidden_dims, hidden_dims)
 
     def forward(self, x: torch.Tensor,
                 edge_indices: torch.Tensor,
@@ -83,11 +86,13 @@ class GNNStateEncoder(nn.Module):
             graph_embedding = mean if graph_embedding is None \
                 else torch.concat([graph_embedding, mean], dim=0)
 
-        # Projection embedding needed for SimCLR
-        proj_embedding = F.relu(self.projection_1(graph_embedding))
-        proj_embedding = self.projection_2(proj_embedding)
+        graph_proj_embedding = F.relu(self.graph_projection_1(graph_embedding))
+        graph_proj_embedding = self.graph_projection_2(graph_proj_embedding)
 
-        return gnn_out_2, graph_embedding, proj_embedding
+        # node_proj_embedding = F.relu(self.node_projection_1(gnn_out_2))
+        # node_proj_embedding = self.node_projection_2(node_proj_embedding)
+
+        return gnn_out_2, graph_embedding, graph_proj_embedding
 
 # class TokenGridStateEncoder(nn.Module):
 #     """

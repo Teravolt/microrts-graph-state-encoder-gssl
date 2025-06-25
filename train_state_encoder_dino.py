@@ -134,13 +134,13 @@ def perturb_state(state, config: Namespace):
     scale_factor = rand_val*(scale_diff)+(1.0-(scale_diff/2.0))
     state.edge_attr[:, 0] = scale_factor*state.edge_attr[:, 0]
 
-    # Perturbation 2: Rotation
-    rotation_factor = 2*rand_val*np.pi
-    state.edge_attr[:, 1] += rotation_factor
-    state.edge_attr[:, 1] = torch.where(
-        state.edge_attr[:, 1] > 2*np.pi,
-        state.edge_attr[:, 1]-2*np.pi,
-        state.edge_attr[:, 1])
+    # # Perturbation 2: Rotation
+    # rotation_factor = 2*rand_val*np.pi
+    # state.edge_attr[:, 1] += rotation_factor
+    # state.edge_attr[:, 1] = torch.where(
+    #     state.edge_attr[:, 1] > 2*np.pi,
+    #     state.edge_attr[:, 1]-2*np.pi,
+    #     state.edge_attr[:, 1])
 
     # Perturbation 3: Drop edges
     edge_index, edge_mask = dropout_edge(state.edge_index)
@@ -158,8 +158,8 @@ def training_loop(config: Namespace, debug_mode=False):
     """
 
     accelerator: Accelerator = None
+    set_seed(config.seed)
     if not debug_mode:
-        set_seed(config.seed)
 
         grad_accumulation_plugin = GradientAccumulationPlugin(
             num_steps=config.grad_accumulation_steps,
@@ -345,7 +345,7 @@ def get_config():
                         help='Read from zip file')
     parser.add_argument('--allow_coordinate', action='store_true',
                         help='Allow coordinates in states and actions')
-    parser.add_argument('--unit_actions_to_ignore', type=list, default=[],
+    parser.add_argument('--unit_actions_to_ignore', nargs="*", type=str, default=[],
                         help='Unit actions to ignore')
     parser.add_argument('--state_representation', type=str, default='graph',
                         help="State representation to use")
@@ -356,6 +356,8 @@ def get_config():
     parser.add_argument('--seed', default=1, type=int, help='Random seed')
     parser.add_argument('--frame_skip_freq', default=5, type=int,
                         help='Number of frames to skip')
+    parser.add_argument('--frame_number_start', default=0, type=int,
+                        help='Offset to start replay parsing')
 
     # Training Config
     parser.add_argument("--batch_size", default=8, type=int,
