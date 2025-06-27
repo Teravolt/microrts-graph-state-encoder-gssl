@@ -135,12 +135,12 @@ def perturb_state(state, config: Namespace):
     state.edge_attr[:, 0] = scale_factor*state.edge_attr[:, 0]
 
     # # Perturbation 2: Rotation
-    # rotation_factor = 2*rand_val*np.pi
-    # state.edge_attr[:, 1] += rotation_factor
-    # state.edge_attr[:, 1] = torch.where(
-    #     state.edge_attr[:, 1] > 2*np.pi,
-    #     state.edge_attr[:, 1]-2*np.pi,
-    #     state.edge_attr[:, 1])
+    rotation_factor = 2*rand_val*np.pi
+    state.edge_attr[:, 1] += rotation_factor
+    state.edge_attr[:, 1] = torch.where(
+        state.edge_attr[:, 1] > 2*np.pi,
+        state.edge_attr[:, 1]-2*np.pi,
+        state.edge_attr[:, 1])
 
     # Perturbation 3: Drop edges
     edge_index, edge_mask = dropout_edge(state.edge_index)

@@ -4,6 +4,7 @@ Train action prediction model
 
 import argparse
 from argparse import Namespace
+from copy import deepcopy
 
 import pandas as pd
 
@@ -140,6 +141,7 @@ def eval_loop(epoch: int, model: torch.nn.Module, dataloader, wandb_run):
     :param model: Model being evaluated
     :param dataloader: Evaluation dataloader
     :param wandb_run: Pointer to W&B run object
+    :returns: Average accuracy
     """
 
     model.eval()
@@ -201,6 +203,8 @@ def eval_loop(epoch: int, model: torch.nn.Module, dataloader, wandb_run):
         print(f"Validation loss: {avg_loss}")
         print(f"Validation accuracy across {len(dataloader)} datapoints: {avg_accuracy}")
 
+    return avg_accuracy
+
 def training_loop(config: Namespace, debug_mode=False):
     """
     Training loop
@@ -261,6 +265,10 @@ def training_loop(config: Namespace, debug_mode=False):
 
         wandb_run.define_metric('lr', step_metric='training_step')
 
+    best_model = None
+    best_accuracy = 0
+    best_epoch = 0
+
     num_steps = 0
     for epoch in range(config.num_train_epochs):
         action_pred_model.train()
@@ -305,7 +313,12 @@ def training_loop(config: Namespace, debug_mode=False):
 
         # Validate model
         print("Evaluating model....")
-        eval_loop(epoch, action_pred_model, val_dataloader, wandb_run)
+        avg_accuracy = eval_loop(epoch, action_pred_model, val_dataloader, wandb_run)
+
+        if avg_accuracy > best_accuracy:
+            best_model = deepcopy(action_pred_model)
+            best_accuracy = avg_accuracy
+            best_epoch = epoch
 
         if wandb_run:
             wandb_run.log({'training_step': num_steps, 'epoch_loss': epoch_loss/num_iters})
@@ -315,9 +328,11 @@ def training_loop(config: Namespace, debug_mode=False):
     if config.save_model:
         # Save model to W&Bs
 
-        torch.save(action_pred_model.state_dict(), config.save_model)
+        torch.save(best_model.state_dict(), config.save_model)
         if wandb_run:
-            model_art = wandb.Artifact(config.model_name, type='model')
+            model_art = wandb.Artifact(
+                config.model_name, type='model',
+                description=f"Epoch - {best_epoch}")
             model_art.add_file(config.save_model)
             wandb_run.log_artifact(model_art)
 

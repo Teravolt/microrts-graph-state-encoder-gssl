@@ -6,6 +6,7 @@ import argparse
 from argparse import Namespace
 
 import pandas as pd
+from sklearn.metrics import precision_recall_fscore_support
 
 import torch
 import torch.nn.functional as F
@@ -121,7 +122,7 @@ def compute_loss(pred_logits: torch.Tensor, gt_unit_actions: torch.Tensor,
 @torch.no_grad()
 def eval_loop(config: Namespace, debug_mode=False):
     """
-    Training loop
+    Evaluation loop
 
     :param config: Script config
     :param debug_mode: True if using debug mode
@@ -144,18 +145,31 @@ def eval_loop(config: Namespace, debug_mode=False):
 
         wandb_run.define_metric("eval_step")
         wandb_run.define_metric("eval_accuracy")
+        wandb_run.define_metric("eval_precision")
+        wandb_run.define_metric("eval_recall")
+        wandb_run.define_metric("eval_f_score")
         wandb_run.define_metric("eval_loss")
 
         wandb_run.define_metric('eval_step_accuracy', step_metric='eval_step')
         wandb_run.define_metric('eval_step_loss', step_metric='eval_step')
 
-    players = []
-    maps = []
-    accuracy = []
+    dataframe = {
+        'player': [],
+        'map': [],
+        'prediction': [],
+        'ground_truth': [],
+        'accuracy': []
+        # 'precision': [],
+        # 'recall': [],
+        # 'f_score': []
+        }
+
+    predictions = []
+    ground_truths = []
 
     avg_loss = 0
-    avg_accuracy = 0
-    for i, batch in enumerate(dataloader):
+
+    for batch_idx, batch in enumerate(dataloader):
 
         pred_logits = action_pred_model(batch)
         gt_unit_actions = batch.unit_actions
@@ -171,38 +185,51 @@ def eval_loop(config: Namespace, debug_mode=False):
         avg_loss += loss.item()
 
         per_batch_accuracy = (preds == gt_unit_actions_).double().mean()
+
         # print(f"Per-batch accuracy: {per_batch_accuracy}")
-        avg_accuracy += per_batch_accuracy
+        # avg_accuracy += per_batch_accuracy
 
         if wandb_run:
-            wandb_run.log({'eval_step': i, 'eval_step_loss': loss})
-            wandb_run.log({'eval_step': i, 'eval_step_accuracy': per_batch_accuracy})
+            wandb_run.log({'eval_step': batch_idx, 'eval_step_loss': loss})
+            wandb_run.log({'eval_step': batch_idx, 'eval_step_accuracy': per_batch_accuracy})
 
-        players += batch.pid
-        maps += batch.map_id
-        accuracy += [per_batch_accuracy for _ in range(len(batch.pid))]
-        # predictions += preds.tolist()
-        # ground_truths += gt_unit_actions_.tolist()
+        dataframe['player'] += batch.pid
+        dataframe['map'] += batch.map_id
 
-    dataframe = {
-        'player': players,
-        'map': maps,
-        'accuracy': accuracy
-        # 'prediction': predictions,
-        # 'ground_truth': ground_truths,
-        }
+        dataframe['accuracy'].append(per_batch_accuracy)
+        # dataframe['precision'].append(prec)
+        # dataframe['recall'].append(recall)
+        # dataframe['f_score'].append(f_score)
+
+        dataframe['prediction'].append(preds.tolist())
+        dataframe['ground_truth'].append(gt_unit_actions_.tolist())
+        predictions += preds.tolist()
+        ground_truths += gt_unit_actions_.tolist()
 
     dataframe = pd.DataFrame(dataframe)
 
-    avg_accuracy = avg_accuracy/len(dataloader)
+    avg_accuracy = dataframe['accuracy'].mean()
     avg_loss = avg_loss/len(dataloader)
+    # avg_precision = dataframe['precision'].mean()
+    # avg_recall = dataframe['recall'].mean()
+    # avg_f_score = dataframe['f_score'].mean()
+
     # print(f"Average accuracy: {avg_accuracy}")
 
+    avg_precision, avg_recall, avg_f_score, _ = precision_recall_fscore_support(
+        ground_truths,
+        predictions,
+        labels=list(range(0, len(UNIT_ACTION_LIST))),
+        average='micro')
+
     if wandb_run:
-        # table = wandb.Table(data=dataframe)
+        table = wandb.Table(data=dataframe)
         wandb_run.log({'eval_accuracy': avg_accuracy}, commit=False)
+        wandb_run.log({'eval_precision': avg_precision}, commit=False)
+        wandb_run.log({'eval_recall': avg_recall}, commit=False)
+        wandb_run.log({'eval_f_score': avg_f_score}, commit=False)
         wandb_run.log({'eval_loss': avg_loss})
-        # wandb_run.log({'val-table': table})
+        wandb_run.log({'val-table': table})
     else:
         print(f"Validation loss: {avg_loss}")
         print(f"Validation accuracy across {len(dataloader)} datapoints: {avg_accuracy}")
