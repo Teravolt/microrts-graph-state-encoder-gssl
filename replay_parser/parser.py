@@ -15,7 +15,9 @@ import numpy as np
 from tqdm import tqdm
 
 from replay_parser.action import create_unit_actions
-from replay_parser.action import create_one_hot_unit_actions
+from replay_parser.action import create_unit_actions_matrix
+from replay_parser.action import UNIT_ACTION_LIST
+
 from replay_parser.state import build_simple_feature_vector_state, \
     build_image_state, build_graph_state, build_character_state
 
@@ -49,7 +51,8 @@ def __add_state_action(state,
                     player_unit_mask[j] = 1
 
             for j, action in enumerate(player_state.unit_actions):
-                if str(int(action)) in unit_actions_to_ignore:
+                index = np.argmax(action[0:len(UNIT_ACTION_LIST)])
+                if str(int(index)) in unit_actions_to_ignore:
                     player_unit_mask[j] = 0
 
             player_state.player_unit_mask = player_unit_mask
@@ -87,7 +90,7 @@ def parse_replay_xml(filename: str, config: dict):
     """
 
     read_from_zip = config.read_from_zip
-    allow_coordinates = config.allow_coordinate
+    # allow_coordinates = config.allow_coordinate
     unit_actions_to_ignore = config.unit_actions_to_ignore
     max_replay_length = config.max_replay_length
     frame_skip_freq = config.frame_skip_freq
@@ -112,6 +115,11 @@ def parse_replay_xml(filename: str, config: dict):
     # player_action_data['type_list'] = {}
     # player_action_data['duplicate_index'] = 0
 
+    unit_type_table = {}
+    unit_type_table_entry = root.find("rts.units.UnitTypeTable")
+    for i, entry in enumerate(unit_type_table_entry):
+        unit_type_table[entry.attrib['name'].lower()] = entry.attrib
+
     entries = root.find('entries')
     # Do not offset frames if the total number of available
     # frames is less than the requested number of frames
@@ -134,17 +142,12 @@ def parse_replay_xml(filename: str, config: dict):
         for unit in physical_game_state_entry.find('units'):
             unit_data_map[unit.attrib['ID']] = unit.attrib
 
-        pid_to_action = create_unit_actions(
+        pid_to_unit_actions = create_unit_actions(
             trace_entry, unit_data_map,
-            unit_actions_to_ignore,
-            allow_coordinates=allow_coordinates)
+            unit_actions_to_ignore)
 
-        for _, player_action in pid_to_action.items():
-            if player_action is not None:
-                for action in player_action:
-                    name, parameters = action
-                    unit_id = parameters['unit-id']
-                    unit_id_to_action[unit_id] = name
+        for _, unit_actions in pid_to_unit_actions.items():
+            unit_id_to_action.update(unit_actions)
 
         if i < start_frame:
             continue
@@ -172,8 +175,8 @@ def parse_replay_xml(filename: str, config: dict):
         is_2d_text = False
         if config.state_representation == "graph":
             state = build_graph_state(unit_data_map)
-            state.unit_actions = create_one_hot_unit_actions(
-                unit_id_to_action, unit_data_map)
+            state.unit_actions = create_unit_actions_matrix(
+                unit_data_map, unit_id_to_action, unit_type_table)
             is_graph = True
         elif config.state_representation == "feature":
             state = build_simple_feature_vector_state(unit_data_map)
@@ -187,7 +190,7 @@ def parse_replay_xml(filename: str, config: dict):
                 f'Unknown state representation: {config.state_representation}')
 
         __add_state_action(state,
-                           pid_to_action,
+                           pid_to_unit_actions,
                            player_to_trace,
                            unit_actions_to_ignore,
                            is_graph=is_graph,

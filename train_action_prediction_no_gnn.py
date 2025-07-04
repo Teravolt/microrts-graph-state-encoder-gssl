@@ -7,6 +7,7 @@ from argparse import Namespace
 from copy import deepcopy
 
 import pandas as pd
+from sklearn.metrics import precision_recall_fscore_support
 
 import torch
 import torch.nn.functional as F
@@ -34,13 +35,14 @@ def prepare_dataloader(config: Namespace):
 
     :param config: Script config
     :returns Dataloader for state dataset, node dimensions,
-             and edge dimensions
+             edge dimensions, and action features
     """
 
     replay_data = parse_replay_dataset(config)
 
     node_dims = -1
     edge_dims = -1
+    num_action_features = -1
 
     dataset = []
     for filename, pid, trace in replay_data:
@@ -61,10 +63,13 @@ def prepare_dataloader(config: Namespace):
             if edge_dims == -1:
                 edge_dims = state.edge_attr.shape[-1]
 
+            if num_action_features == -1:
+                num_action_features = state.unit_actions.shape[1]
+
             if actions is None:
                 continue
 
-            state.unit_actions = torch.tensor(state.unit_actions, dtype=torch.long)
+            state.unit_actions = torch.tensor(state.unit_actions, dtype=torch.float32)
             state.player_unit_mask = torch.tensor(state.player_unit_mask,
                                                   dtype=torch.bool)
             state.pid = pid
@@ -83,7 +88,7 @@ def prepare_dataloader(config: Namespace):
                               generator=config.rng, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=1, generator=config.rng, shuffle=False)
 
-    return train_loader, val_loader, node_dims, edge_dims
+    return train_loader, val_loader, node_dims, edge_dims, num_action_features
 
 def create_model(node_dims: int, _edge_dims: int,
                  hidden_dims: int, num_actions: int,
@@ -118,7 +123,7 @@ def compute_loss(pred_logits: torch.Tensor, gt_unit_actions: torch.Tensor,
 
     # print(f"Pred actions: {pred_logits.shape} - {pred_logits_.shape}")
     # print(f"GT actions: {gt_unit_actions.shape} - {gt_unit_actions_.shape}")
-    loss = F.cross_entropy(pred_logits_, gt_unit_actions_)
+    loss = F.binary_cross_entropy_with_logits(pred_logits_, gt_unit_actions_)
 
     return loss
 
@@ -139,20 +144,28 @@ def eval_loop(epoch: int, model: torch.nn.Module, dataloader, wandb_run):
     players = []
     maps = []
     accuracy = []
-    # predictions = []
-    # ground_truths = []
+    predictions = None
+    ground_truths = None
 
     avg_loss = 0
     avg_accuracy = 0
+    num_action_features = -1
+
     for _, batch in enumerate(dataloader):
 
         pred_logits = model(batch)
+        if num_action_features == -1:
+            num_action_features = pred_logits.shape[1]
+
         gt_unit_actions = batch.unit_actions
         player_unit_mask = batch.player_unit_mask
 
         pred_logits_ = pred_logits[player_unit_mask, :]
         gt_unit_actions_ = gt_unit_actions[player_unit_mask]
-        preds = torch.argmax(pred_logits_, dim=-1)
+        # preds = torch.argmax(pred_logits_, dim=-1)
+        preds = torch.sigmoid(pred_logits_)
+        # print(f"Predictions before thresholding: {preds}")
+        preds = torch.where(preds > 0.85, 1, 0)
 
         # print(f"Predictions: {preds} - Ground truth: {gt_unit_actions_}")
 
@@ -166,6 +179,11 @@ def eval_loop(epoch: int, model: torch.nn.Module, dataloader, wandb_run):
         players += batch.pid
         maps += batch.map_id
         accuracy += [per_batch_accuracy for _ in range(len(batch.pid))]
+
+        predictions = preds if predictions is None\
+            else torch.concatenate([predictions, preds], dim=0)
+        ground_truths = gt_unit_actions_ if ground_truths is None \
+            else torch.concatenate([ground_truths, gt_unit_actions_], dim=0)
         # predictions += preds.tolist()
         # ground_truths += gt_unit_actions_.tolist()
 
@@ -184,14 +202,24 @@ def eval_loop(epoch: int, model: torch.nn.Module, dataloader, wandb_run):
     avg_loss = avg_loss/len(dataloader)
     # print(f"Average accuracy: {avg_accuracy}")
 
+    avg_precision, avg_recall, avg_f_score, _ = precision_recall_fscore_support(
+        ground_truths.numpy(),
+        predictions.numpy(),
+        labels=list(range(0, num_action_features)),
+        average='samples')
+
     if wandb_run:
         # table = wandb.Table(data=dataframe)
         wandb_run.log({'accuracy': avg_accuracy}, commit=False)
         wandb_run.log({'val-loss': avg_loss}, commit=False)
+        wandb_run.log({'val_precision': avg_precision}, commit=False)
+        wandb_run.log({'val_recall': avg_recall}, commit=False)
+        wandb_run.log({'val_f_score': avg_f_score})
         # wandb_run.log({'val-table': table})
     else:
         print(f"Validation loss: {avg_loss}")
         print(f"Validation accuracy across {len(dataloader)} datapoints: {avg_accuracy}")
+        print(f"Precision, Recall, and F1-Score: {avg_precision},{avg_recall},{avg_f_score}")
 
     return avg_accuracy
 
@@ -217,9 +245,10 @@ def training_loop(config: Namespace, debug_mode=False):
             gradient_accumulation_plugin=grad_accumulation_plugin,
             cpu=(config.device == 'cpu'))
 
-    train_dataloader, val_dataloader, node_dims, edge_dims = prepare_dataloader(config)
+    train_dataloader, val_dataloader, node_dims, edge_dims, num_action_features \
+        = prepare_dataloader(config)
     action_pred_model = create_model(node_dims, edge_dims,
-                                     config.hidden_dims, len(UNIT_ACTION_LIST),
+                                     config.hidden_dims, num_action_features,
                                      config)
 
     optimizer = optim.AdamW(action_pred_model.parameters(),
@@ -247,6 +276,9 @@ def training_loop(config: Namespace, debug_mode=False):
         wandb_run.define_metric("epoch")
         wandb_run.define_metric("training_step")
 
+        wandb_run.define_metric("val_precision")
+        wandb_run.define_metric("val_recall")
+        wandb_run.define_metric("val_f_score")
         wandb_run.define_metric('val_total_loss', step_metric='epoch')
 
         wandb_run.define_metric('step_loss', step_metric='training_step')
