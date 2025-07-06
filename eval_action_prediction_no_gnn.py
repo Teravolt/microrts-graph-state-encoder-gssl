@@ -29,13 +29,14 @@ def prepare_dataloader(config: Namespace):
 
     :param config: Script config
     :returns Dataloader for state dataset, node dimensions,
-             and edge dimensions
+             edge dimensions, and action features
     """
 
     replay_data = parse_replay_dataset(config)
 
     node_dims = -1
     edge_dims = -1
+    num_action_features = -1
 
     dataset = []
     for filename, pid, trace in replay_data:
@@ -56,10 +57,13 @@ def prepare_dataloader(config: Namespace):
             if edge_dims == -1:
                 edge_dims = state.edge_attr.shape[-1]
 
+            if num_action_features == -1:
+                num_action_features = state.unit_actions.shape[1]
+
             if actions is None:
                 continue
 
-            state.unit_actions = torch.tensor(state.unit_actions, dtype=torch.long)
+            state.unit_actions = torch.tensor(state.unit_actions, dtype=torch.float32)
             state.player_unit_mask = torch.tensor(state.player_unit_mask,
                                                   dtype=torch.bool)
             state.pid = pid
@@ -74,7 +78,7 @@ def prepare_dataloader(config: Namespace):
 
     dataloader = DataLoader(dataset, batch_size=1, generator=config.rng, shuffle=False)
 
-    return dataloader, node_dims, edge_dims
+    return dataloader, node_dims, edge_dims, num_action_features
 
 def create_model(node_dims: int, _edge_dims: int,
                  hidden_dims: int, num_actions: int,
@@ -113,7 +117,7 @@ def compute_loss(pred_logits: torch.Tensor, gt_unit_actions: torch.Tensor,
 
     # print(f"Pred actions: {pred_logits.shape} - {pred_logits_.shape}")
     # print(f"GT actions: {gt_unit_actions.shape} - {gt_unit_actions_.shape}")
-    loss = F.cross_entropy(pred_logits_, gt_unit_actions_)
+    loss = F.binary_cross_entropy_with_logits(pred_logits_, gt_unit_actions_)
 
     return loss
 
@@ -128,9 +132,9 @@ def eval_loop(config: Namespace, debug_mode=False):
 
     set_seed(config.seed)
 
-    dataloader, node_dims, edge_dims = prepare_dataloader(config)
+    dataloader, node_dims, edge_dims, num_action_features = prepare_dataloader(config)
     action_pred_model = create_model(node_dims, edge_dims,
-                                     config.hidden_dims, len(UNIT_ACTION_LIST),
+                                     config.hidden_dims, num_action_features,
                                      config)
     action_pred_model.eval()
 
@@ -154,16 +158,16 @@ def eval_loop(config: Namespace, debug_mode=False):
     dataframe = {
         'player': [],
         'map': [],
-        'prediction': [],
-        'ground_truth': [],
+        # 'prediction': [],
+        # 'ground_truth': [],
         'accuracy': []
         # 'precision': [],
         # 'recall': [],
         # 'f_score': []
         }
 
-    predictions = []
-    ground_truths = []
+    predictions = None
+    ground_truths = None
 
     avg_loss = 0
 
@@ -175,7 +179,9 @@ def eval_loop(config: Namespace, debug_mode=False):
 
         pred_logits_ = pred_logits[player_unit_mask, :]
         gt_unit_actions_ = gt_unit_actions[player_unit_mask]
-        preds = torch.argmax(pred_logits_, dim=-1)
+        preds = torch.sigmoid(pred_logits_)
+        # print(f"Predictions before thresholding: {preds}")
+        preds = torch.where(preds > 0.85, 1, 0)
 
         # print(f"Predictions: {preds} - Ground truth: {gt_unit_actions_}")
 
@@ -195,14 +201,19 @@ def eval_loop(config: Namespace, debug_mode=False):
         dataframe['map'] += batch.map_id
 
         dataframe['accuracy'].append(per_batch_accuracy)
+
+        predictions = preds if predictions is None\
+            else torch.concatenate([predictions, preds], dim=0)
+        ground_truths = gt_unit_actions_ if ground_truths is None \
+            else torch.concatenate([ground_truths, gt_unit_actions_], dim=0)
         # dataframe['precision'].append(prec)
         # dataframe['recall'].append(recall)
         # dataframe['f_score'].append(f_score)
 
-        dataframe['prediction'].append(preds.tolist())
-        dataframe['ground_truth'].append(gt_unit_actions_.tolist())
-        predictions += preds.tolist()
-        ground_truths += gt_unit_actions_.tolist()
+        # dataframe['prediction'].append(preds.tolist())
+        # dataframe['ground_truth'].append(gt_unit_actions_.tolist())
+        # predictions += preds.tolist()
+        # ground_truths += gt_unit_actions_.tolist()
 
     dataframe = pd.DataFrame(dataframe)
 
@@ -215,19 +226,19 @@ def eval_loop(config: Namespace, debug_mode=False):
     # print(f"Average accuracy: {avg_accuracy}")
 
     avg_precision, avg_recall, avg_f_score, _ = precision_recall_fscore_support(
-        ground_truths,
-        predictions,
-        labels=list(range(0, len(UNIT_ACTION_LIST))),
-        average='micro')
+        ground_truths.numpy(),
+        predictions.numpy(),
+        labels=list(range(0, num_action_features)),
+        average='samples')
 
     if wandb_run:
-        table = wandb.Table(data=dataframe)
+        # table = wandb.Table(data=dataframe)
         wandb_run.log({'eval_accuracy': avg_accuracy}, commit=False)
         wandb_run.log({'eval_precision': avg_precision}, commit=False)
         wandb_run.log({'eval_recall': avg_recall}, commit=False)
         wandb_run.log({'eval_f_score': avg_f_score}, commit=False)
         wandb_run.log({'eval_loss': avg_loss})
-        wandb_run.log({'val-table': table})
+        # wandb_run.log({'val-table': table})
     else:
         print(f"Validation loss: {avg_loss}")
         print(f"Validation accuracy across {len(dataloader)} datapoints: {avg_accuracy}")
