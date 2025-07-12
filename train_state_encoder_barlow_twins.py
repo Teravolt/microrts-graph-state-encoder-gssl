@@ -1,6 +1,6 @@
 """
-Train graph state encoder using DINO
-Paper: https://arxiv.org/pdf/2104.14294
+Train graph state encoder using Graph Barlow Twins
+Paper: https://arxiv.org/pdf/2106.02466
 """
 
 import argparse
@@ -16,6 +16,7 @@ import torch.nn.functional as F
 
 from torch_geometric.loader import DataLoader
 from torch_geometric.utils import dropout_edge
+from torch_geometric.transforms.normalize_features import NormalizeFeatures
 
 from accelerate import Accelerator
 from accelerate.utils import GradientAccumulationPlugin
@@ -83,39 +84,32 @@ def create_model(node_dims: int, edge_dims: int, hidden_dims: int,
 
     return state_enc
 
-def compute_loss(proj_embedding_s1: torch.Tensor, proj_embedding_s2: torch.Tensor,
-                 proj_embedding_t1: torch.Tensor, proj_embedding_t2: torch.Tensor,
-                 student_temp: torch.Tensor, teacher_temp: torch.Tensor):
+def compute_loss(node_embeddings_1: torch.Tensor, node_embeddings_2: torch.Tensor):
     """
-    Compute DINO loss
+    Compute Barlow Twins Cross-Correlation loss
 
-    :param proj_embedding_s1: Projection from student for graph 1
-    :param proj_embedding_s2: Projection from student for graph 2
-    :param proj_embedding_t1: Projection from teacher for graph 1
-    :param proj_embedding_t2: Projection from teacher for graph 2
-    :param student_temp: Student temperature
-    :param teacher_temp: Teacher temperature
-    :returns: DINO loss between the two graph embeddings
+    :param node_embeddings_1: Node embeddings for graph 1
+    :param node_embeddings_2: Node embeddings for graph 2
+    :returns: Barlow Twins loss
     """
 
-    # batch_size = proj_embedding_s1.shape[0]
+    eps = 1e-15
+    batch_size = node_embeddings_1.shape[0]
+    dims = node_embeddings_1.shape[1]
+    _lambda = 1 / dims
 
-    # Pairwise similarity
-    # norm_graph_embedding_1 = F.normalize(proj_embedding_s1, p=2, dim=1)
-    # norm_graph_embedding_2 = F.normalize(proj_embedding_s2, p=2, dim=1)
+    # Batch normalization
+    node_embeddings_1_norm = (node_embeddings_1 - node_embeddings_1.mean(dim=0)) / (node_embeddings_1.std(dim=0) + eps)
+    node_embeddings_2_norm = (node_embeddings_2 - node_embeddings_2.mean(dim=0)) / (node_embeddings_2.std(dim=0) + eps)
 
-    graph_softmax_s1 = F.softmax(proj_embedding_s1 / student_temp, dim=-1)
-    graph_softmax_s2 = F.softmax(proj_embedding_s2 / student_temp, dim=-1)
+    # Compute cross-correlation matrix
+    cross_corr_matrix = (node_embeddings_1_norm.T @ node_embeddings_2_norm) / batch_size
 
-    graph_softmax_t1 = F.softmax(proj_embedding_t1 / teacher_temp, dim=-1)
-    graph_softmax_t2 = F.softmax(proj_embedding_t2 / teacher_temp, dim=-1)
-
-    # print(f"Graph softmax s1: {graph_softmax_s1.shape}")
-    # print(f"Graph softmax s2: {graph_softmax_s2.shape}")
-
-    loss_1 = -(graph_softmax_t1*torch.log(graph_softmax_s2)).sum(dim=1).mean()
-    loss_2 = -(graph_softmax_t2*torch.log(graph_softmax_s1)).sum(dim=1).mean()
-    loss = (loss_1 + loss_2)/2.0
+    # Loss function
+    off_diagonal_mask = ~torch.eye(dims).bool()
+    loss = \
+        (1 - cross_corr_matrix.diagonal()).pow(2).sum() \
+            + _lambda * cross_corr_matrix[off_diagonal_mask].pow(2).sum()
 
     return loss
 
@@ -173,10 +167,9 @@ def training_loop(config: Namespace, debug_mode=False):
             cpu=(config.device == 'cpu'))
 
     dataloader, node_dims, edge_dims = prepare_dataloader(config)
-    student_model = create_model(node_dims, edge_dims, config.hidden_dims, config)
-    teacher_model = deepcopy(student_model)
+    model = create_model(node_dims, edge_dims, config.hidden_dims, config)
 
-    optimizer = optim.AdamW(student_model.parameters(),
+    optimizer = optim.AdamW(model.parameters(),
                             lr=config.learning_rate)
 
 # #     scheduler = CosineAnnealingLR(
@@ -195,8 +188,8 @@ def training_loop(config: Namespace, debug_mode=False):
         # last_epoch=config.num_train_epochs*len(train_dataloader))
 
     if accelerator:
-        student_model, optimizer, dataloader, scheduler \
-            = accelerator.prepare(student_model, optimizer, dataloader, scheduler)
+        model, optimizer, dataloader, scheduler \
+            = accelerator.prepare(model, optimizer, dataloader, scheduler)
 
     wandb_run = None
     if not debug_mode:
@@ -217,8 +210,9 @@ def training_loop(config: Namespace, debug_mode=False):
         wandb_run.define_metric('lr', step_metric='training_step')
 
     num_steps = 0
+    norm_feature_fn = NormalizeFeatures(attrs=['x'])
     for epoch in range(config.num_train_epochs):
-        student_model.train()
+        model.train()
 
         print(f"Epoch {epoch}")
 
@@ -229,8 +223,10 @@ def training_loop(config: Namespace, debug_mode=False):
 
             optimizer.zero_grad()
 
-            state_1 = deepcopy(batch)
-            state_2 = deepcopy(batch)
+            norm_batch = norm_feature_fn(batch)
+
+            state_1 = deepcopy(norm_batch)
+            state_2 = deepcopy(norm_batch)
 
             # Perturb both states
             perturbed_state_1 = perturb_state(state_1, config)
@@ -244,46 +240,29 @@ def training_loop(config: Namespace, debug_mode=False):
             # perturbed_contrast_state.edge_attr[:, 0] = \
             #     scale_factor*perturbed_contrast_state.edge_attr[:, 0]
 
-            _, _, proj_embedding_s1 = student_model(
+            node_embeddings_1, _, _ = model(
                 perturbed_state_1.x,
                 perturbed_state_1.edge_index,
                 perturbed_state_1.edge_attr,
                 perturbed_state_1.batch)
 
-            _, _, proj_embedding_s2 = student_model(
+            node_embeddings_2, _, _ = model(
                 perturbed_state_2.x,
                 perturbed_state_2.edge_index,
                 perturbed_state_2.edge_attr,
                 perturbed_state_2.batch)
 
-            with torch.no_grad():
-                _, _, proj_embedding_t1 = teacher_model(
-                    perturbed_state_1.x,
-                    perturbed_state_1.edge_index,
-                    perturbed_state_1.edge_attr,
-                    perturbed_state_1.batch)
-
-                _, _, proj_embedding_t2 = teacher_model(
-                    perturbed_state_2.x,
-                    perturbed_state_2.edge_index,
-                    perturbed_state_2.edge_attr,
-                    perturbed_state_2.batch)
-
             loss = compute_loss(
-                proj_embedding_s1,
-                proj_embedding_s2,
-                proj_embedding_t1,
-                proj_embedding_t2,
-                config.student_temp,
-                config.teacher_temp)
+                node_embeddings_1,
+                node_embeddings_2)
 
             # accelerator.print(f"Loss: {loss.item()}")
             if accelerator:
                 accelerator.backward(loss)
-                accelerator.clip_grad_norm_(student_model.parameters(), 1.0)
+                accelerator.clip_grad_norm_(model.parameters(), 1.0)
             else:
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(student_model.parameters(), 1.0)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
 
             epoch_loss += loss.item()
 
@@ -292,14 +271,6 @@ def training_loop(config: Namespace, debug_mode=False):
                 wandb_run.log({'training_step': num_steps, 'lr': scheduler.get_lr()[0]})
             else:
                 print(f"Step loss: {loss.item()}")
-
-            if num_steps % config.update_freq == 0:
-                # ema_model.load_state_dict(model.state_dict())
-                teacher_state_dict = teacher_model.state_dict()
-                for key, parameters in student_model.state_dict().items():
-                    teacher_state_dict[key] = config.ema_alpha*teacher_state_dict[key] \
-                        + (1-config.ema_alpha)*parameters
-                teacher_model.load_state_dict(teacher_state_dict)
 
             num_steps += 1
             num_iters += 1
@@ -320,7 +291,7 @@ def training_loop(config: Namespace, debug_mode=False):
     if config.save_model:
         # Save model to W&Bs
 
-        torch.save(student_model.state_dict(), config.save_model)
+        torch.save(model.state_dict(), config.save_model)
         if wandb_run:
             model_art = wandb.Artifact(config.model_name, type='model')
             model_art.add_file(config.save_model)
