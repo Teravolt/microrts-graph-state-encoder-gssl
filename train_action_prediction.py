@@ -4,6 +4,7 @@ Train action prediction model
 
 import argparse
 from argparse import Namespace
+from pathlib import Path
 from copy import deepcopy
 
 import pandas as pd
@@ -15,6 +16,7 @@ from torch import optim
 from torch.utils.data import random_split
 
 from torch_geometric.loader import DataLoader
+from torch_geometric.transforms.normalize_features import NormalizeFeatures
 
 from accelerate import Accelerator
 from accelerate.utils import GradientAccumulationPlugin
@@ -231,7 +233,7 @@ def eval_loop(epoch: int, model: torch.nn.Module, dataloader, wandb_run):
         print(f"Validation accuracy across {len(dataloader)} datapoints: {avg_accuracy}")
         print(f"Precision, Recall, and F1-Score: {avg_precision},{avg_recall},{avg_f_score}")
 
-    return avg_accuracy
+    return avg_f_score
 
 def training_loop(config: Namespace, debug_mode=False):
     """
@@ -298,10 +300,12 @@ def training_loop(config: Namespace, debug_mode=False):
         wandb_run.define_metric('lr', step_metric='training_step')
 
     best_model = None
-    best_accuracy = 0
+    best_val_metric_val = 0
     best_epoch = 0
 
     num_steps = 0
+    norm_feature_fn = NormalizeFeatures(attrs=['x'])
+
     for epoch in range(config.num_train_epochs):
         action_pred_model.train()
 
@@ -314,7 +318,9 @@ def training_loop(config: Namespace, debug_mode=False):
 
             optimizer.zero_grad()
 
-            pred_logits = action_pred_model(batch)
+            norm_batch = norm_feature_fn(batch)
+
+            pred_logits = action_pred_model(norm_batch)
             gt_unit_actions = batch.unit_actions
             player_unit_mask = batch.player_unit_mask
 
@@ -345,11 +351,11 @@ def training_loop(config: Namespace, debug_mode=False):
 
         # Validate model
         print("Evaluating model....")
-        avg_accuracy = eval_loop(epoch, action_pred_model, val_dataloader, wandb_run)
+        val_metric_val = eval_loop(epoch, action_pred_model, val_dataloader, wandb_run)
 
-        if avg_accuracy > best_accuracy:
+        if val_metric_val > best_val_metric_val:
             best_model = deepcopy(action_pred_model)
-            best_accuracy = avg_accuracy
+            best_val_metric_val = val_metric_val
             best_epoch = epoch
 
         if wandb_run:
@@ -362,8 +368,9 @@ def training_loop(config: Namespace, debug_mode=False):
 
         torch.save(best_model.state_dict(), config.save_model)
         if wandb_run:
+            model_name = config.save_model.stem
             model_art = wandb.Artifact(
-                config.model_name, type='model',
+                model_name, type='model',
                 description=f"Epoch - {best_epoch}")
             model_art.add_file(config.save_model)
             wandb_run.log_artifact(model_art)
@@ -428,9 +435,9 @@ def get_config():
                         help="Percentage of dataset used for training.")
 
     # Model Config
-    parser.add_argument("--model_name", default="action-predictor", type=str,
-                        help="Name of model")
-    parser.add_argument("--save_model", default=None, type=str,
+    # parser.add_argument("--model_name", default="action-predictor", type=str,
+    #                     help="Name of model")
+    parser.add_argument("--save_model", default=None, type=Path,
                         help="Filename for model")
     parser.add_argument("--state_model", default=None,
                         help="Path to file containing the state encoder")
@@ -438,7 +445,7 @@ def get_config():
                         help="Set if fine-tuning the state encoder")
 
     # Weights and Biases
-    parser.add_argument('--project_name', default="microrts-action-predictor",
+    parser.add_argument('--project_name', default="microrts-action-prediction",
                         type=str, help="Name of project on W&Bs")
     parser.add_argument('--run_name', default="run-0",
                         type=str, help="Name of run on W&Bs")
