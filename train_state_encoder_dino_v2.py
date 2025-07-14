@@ -29,7 +29,7 @@ import wandb
 
 from replay_parser.parser import parse_replay_dataset
 
-from nn.state_encoder import GNNStateEncoder
+from nn.state_encoder import GNNStateEncoderV2
 
 def prepare_dataloader(config: Namespace):
     """
@@ -81,7 +81,7 @@ def create_model(node_dims: int, edge_dims: int, hidden_dims: int,
     :returns: GNN state encoder model
     """
 
-    state_enc = GNNStateEncoder(node_dims, edge_dims, hidden_dims)
+    state_enc = GNNStateEncoderV2(node_dims, edge_dims, hidden_dims)
 
     return state_enc
 
