@@ -22,7 +22,8 @@ from replay_parser.parser import parse_replay_dataset
 from replay_parser.action import UNIT_ACTION_LIST
 from replay_parser.state import UNIT_TYPES
 
-from nn.action_predictor import ActionPredictor
+from nn.state_encoder import GNNStateEncoderV2
+from nn.action_predictor import ActionPredictorGNN
 
 def prepare_dataloader(config: Namespace):
     """
@@ -81,7 +82,7 @@ def prepare_dataloader(config: Namespace):
 
     return dataloader, node_dims, edge_dims, num_action_features
 
-def create_model(node_dims: int, _edge_dims: int,
+def create_model(node_dims: int, edge_dims: int,
                  hidden_dims: int, num_actions: int,
                  config: Namespace):
     """
@@ -95,7 +96,8 @@ def create_model(node_dims: int, _edge_dims: int,
     :returns: Action prediction model
     """
 
-    action_predictor = ActionPredictor(node_dims, hidden_dims, num_actions)
+    state_enc = GNNStateEncoderV2(node_dims, edge_dims, hidden_dims)
+    action_predictor = ActionPredictorGNN(state_enc, hidden_dims, num_actions)
 
     model_dict = torch.load(config.action_model)
     action_predictor.load_state_dict(model_dict)
