@@ -6,6 +6,7 @@ Paper: https://arxiv.org/pdf/2106.02466
 import argparse
 from argparse import Namespace
 
+from pathlib import Path
 from copy import deepcopy
 
 import numpy as np
@@ -28,7 +29,7 @@ import wandb
 
 from replay_parser.parser import parse_replay_dataset
 
-from nn.state_encoder import GNNStateEncoder
+from nn.state_encoder import GNNStateEncoderV2
 
 def prepare_dataloader(config: Namespace):
     """
@@ -80,7 +81,7 @@ def create_model(node_dims: int, edge_dims: int, hidden_dims: int,
     :returns: GNN state encoder model
     """
 
-    state_enc = GNNStateEncoder(node_dims, edge_dims, hidden_dims)
+    state_enc = GNNStateEncoderV2(node_dims, edge_dims, hidden_dims)
 
     return state_enc
 
@@ -293,7 +294,8 @@ def training_loop(config: Namespace, debug_mode=False):
 
         torch.save(model.state_dict(), config.save_model)
         if wandb_run:
-            model_art = wandb.Artifact(config.model_name, type='model')
+            model_name = config.save_model.stem
+            model_art = wandb.Artifact(model_name, type='model')
             model_art.add_file(config.save_model)
             wandb_run.log_artifact(model_art)
 
@@ -358,13 +360,13 @@ def get_config():
                         help="Flag to turn on debugging mode.")
 
     # Model Config
-    parser.add_argument("--model_name", default="microrts-gnn-state-encoder", type=str,
-                        help="Name of model")
-    parser.add_argument("--save_model", default=None, type=str,
+    # parser.add_argument("--model_name", default="gnn-state-encoder", type=str,
+    #                     help="Name of model")
+    parser.add_argument("--save_model", default=None, type=Path,
                         help="Filename for model")
 
     # Weights and Biases
-    parser.add_argument('--project_name', default="microrts-graph-replay-encoder",
+    parser.add_argument('--project_name', default="microrts-graph-state-ssl",
                         type=str, help="Name of project on W&Bs")
     parser.add_argument('--run_name', default="run-0",
                         type=str, help="Name of run on W&Bs")
