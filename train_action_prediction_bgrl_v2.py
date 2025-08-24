@@ -18,8 +18,8 @@ from torch.utils.data import random_split
 from torch_geometric.loader import DataLoader
 from torch_geometric.transforms.normalize_features import NormalizeFeatures
 
-from accelerate import Accelerator
-from accelerate.utils import GradientAccumulationPlugin
+# from accelerate import Accelerator
+# from accelerate.utils import GradientAccumulationPlugin
 from accelerate.utils import set_seed
 
 from diffusers import get_cosine_schedule_with_warmup
@@ -243,19 +243,19 @@ def training_loop(config: Namespace, debug_mode=False):
     :param debug_mode: True if using debug mode
     """
 
-    accelerator: Accelerator = None
+    # accelerator: Accelerator = None
     set_seed(config.seed)
 
-    if not debug_mode:
-        grad_accumulation_plugin = GradientAccumulationPlugin(
-            num_steps=config.grad_accumulation_steps,
-            adjust_scheduler=True,
-            sync_with_dataloader=True)
+    # if not debug_mode:
+    #     grad_accumulation_plugin = GradientAccumulationPlugin(
+    #         num_steps=config.grad_accumulation_steps,
+    #         adjust_scheduler=True,
+    #         sync_with_dataloader=True)
 
-        accelerator = Accelerator(
-            mixed_precision=config.mixed_precision,
-            gradient_accumulation_plugin=grad_accumulation_plugin,
-            cpu=(config.device == 'cpu'))
+    #     accelerator = Accelerator(
+    #         mixed_precision=config.mixed_precision,
+    #         gradient_accumulation_plugin=grad_accumulation_plugin,
+    #         cpu=(config.device == 'cpu'))
 
     train_dataloader, val_dataloader, node_dims, edge_dims, num_action_features \
         = prepare_dataloader(config)
@@ -273,10 +273,10 @@ def training_loop(config: Namespace, debug_mode=False):
     scheduler = get_cosine_schedule_with_warmup(
         optimizer, config.lr_warmup_steps, len(train_dataloader)*config.num_train_epochs)
 
-    if accelerator:
-        action_pred_model, optimizer, train_dataloader, val_dataloader, scheduler \
-            = accelerator.prepare(action_pred_model, optimizer,
-                                  train_dataloader, val_dataloader, scheduler)
+    # if accelerator:
+    #     action_pred_model, optimizer, train_dataloader, val_dataloader, scheduler \
+    #         = accelerator.prepare(action_pred_model, optimizer,
+    #                               train_dataloader, val_dataloader, scheduler)
 
     wandb_run = None
     if not debug_mode:
@@ -327,12 +327,12 @@ def training_loop(config: Namespace, debug_mode=False):
             loss = compute_loss(pred_logits, gt_unit_actions, player_unit_mask)
 
             # accelerator.print(f"Loss: {loss.item()}")
-            if accelerator:
-                accelerator.backward(loss)
-                accelerator.clip_grad_norm_(action_pred_model.parameters(), 1.0)
-            else:
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(action_pred_model.parameters(), 1.0)
+            # if accelerator:
+            #     accelerator.backward(loss)
+            #     accelerator.clip_grad_norm_(action_pred_model.parameters(), 1.0)
+            # else:
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(action_pred_model.parameters(), 1.0)
 
             epoch_loss += loss.item()
 

@@ -19,8 +19,8 @@ from torch_geometric.loader import DataLoader
 from torch_geometric.utils import dropout_edge
 from torch_geometric.transforms.normalize_features import NormalizeFeatures
 
-from accelerate import Accelerator
-from accelerate.utils import GradientAccumulationPlugin
+# from accelerate import Accelerator
+# from accelerate.utils import GradientAccumulationPlugin
 from accelerate.utils import set_seed
 
 from diffusers import get_cosine_schedule_with_warmup
@@ -161,19 +161,19 @@ def training_loop(config: Namespace, debug_mode=False):
     :param debug_mode: True if using debug mode
     """
 
-    accelerator: Accelerator = None
+    # accelerator: Accelerator = None
     set_seed(config.seed)
-    if not debug_mode:
+    # if not debug_mode:
 
-        grad_accumulation_plugin = GradientAccumulationPlugin(
-            num_steps=config.grad_accumulation_steps,
-            adjust_scheduler=True,
-            sync_with_dataloader=True)
+    #     grad_accumulation_plugin = GradientAccumulationPlugin(
+    #         num_steps=config.grad_accumulation_steps,
+    #         adjust_scheduler=True,
+    #         sync_with_dataloader=True)
 
-        accelerator = Accelerator(
-            mixed_precision=config.mixed_precision,
-            gradient_accumulation_plugin=grad_accumulation_plugin,
-            cpu=(config.device == 'cpu'))
+    #     accelerator = Accelerator(
+    #         mixed_precision=config.mixed_precision,
+    #         gradient_accumulation_plugin=grad_accumulation_plugin,
+    #         cpu=(config.device == 'cpu'))
 
     dataloader, node_dims, edge_dims = prepare_dataloader(config)
     student_model = create_model(node_dims, edge_dims, config.hidden_dims, config)
@@ -197,9 +197,9 @@ def training_loop(config: Namespace, debug_mode=False):
 #         T_0=config.lr_warmup_steps)
         # last_epoch=config.num_train_epochs*len(train_dataloader))
 
-    if accelerator:
-        student_model, optimizer, dataloader, scheduler \
-            = accelerator.prepare(student_model, optimizer, dataloader, scheduler)
+    # if accelerator:
+    #     student_model, optimizer, dataloader, scheduler \
+    #         = accelerator.prepare(student_model, optimizer, dataloader, scheduler)
 
     wandb_run = None
     if not debug_mode:
@@ -287,12 +287,13 @@ def training_loop(config: Namespace, debug_mode=False):
                 center_val)
 
             # accelerator.print(f"Loss: {loss.item()}")
-            if accelerator:
-                accelerator.backward(loss)
-                accelerator.clip_grad_norm_(student_model.parameters(), 1.0)
-            else:
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(student_model.parameters(), 1.0)
+            # if accelerator:
+            #     accelerator.backward(loss)
+            #     accelerator.clip_grad_norm_(student_model.parameters(), 1.0)
+
+            # else:
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(student_model.parameters(), 1.0)
 
             epoch_loss += loss.item()
 
@@ -302,6 +303,10 @@ def training_loop(config: Namespace, debug_mode=False):
             else:
                 print(f"Step loss: {loss.item()}")
 
+            with torch.no_grad():
+                batch_center = torch.cat([proj_embedding_t1, proj_embedding_t2], dim=0).mean(dim=0)
+                center_val = config.center_ema*center_val + (1-config.center_ema)*batch_center
+
             if num_steps % config.update_freq == 0:
                 # ema_model.load_state_dict(model.state_dict())
                 teacher_state_dict = teacher_model.state_dict()
@@ -309,10 +314,6 @@ def training_loop(config: Namespace, debug_mode=False):
                     teacher_state_dict[key] = config.ema_alpha*teacher_state_dict[key] \
                         + (1-config.ema_alpha)*parameters
                 teacher_model.load_state_dict(teacher_state_dict)
-
-                with torch.no_grad():
-                    batch_center = torch.cat([proj_embedding_t1, proj_embedding_t2], dim=0).mean(dim=0)
-                    center_val = config.center_ema*center_val + (1-config.center_ema)*batch_center
 
             num_steps += 1
             num_iters += 1

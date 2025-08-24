@@ -19,8 +19,8 @@ from torch_geometric.loader import DataLoader
 from torch_geometric.utils import dropout_edge
 from torch_geometric.transforms.normalize_features import NormalizeFeatures
 
-from accelerate import Accelerator
-from accelerate.utils import GradientAccumulationPlugin
+# from accelerate import Accelerator
+# from accelerate.utils import GradientAccumulationPlugin
 from accelerate.utils import set_seed
 
 from diffusers import get_cosine_schedule_with_warmup
@@ -142,19 +142,19 @@ def training_loop(config: Namespace, debug_mode=False):
     :param debug_mode: True if using debug mode
     """
 
-    accelerator: Accelerator = None
+    # accelerator: Accelerator = None
     set_seed(config.seed)
-    if not debug_mode:
+    # if not debug_mode:
 
-        grad_accumulation_plugin = GradientAccumulationPlugin(
-            num_steps=config.grad_accumulation_steps,
-            adjust_scheduler=True,
-            sync_with_dataloader=True)
+    #     grad_accumulation_plugin = GradientAccumulationPlugin(
+    #         num_steps=config.grad_accumulation_steps,
+    #         adjust_scheduler=True,
+    #         sync_with_dataloader=True)
 
-        accelerator = Accelerator(
-            mixed_precision=config.mixed_precision,
-            gradient_accumulation_plugin=grad_accumulation_plugin,
-            cpu=(config.device == 'cpu'))
+    #     accelerator = Accelerator(
+    #         mixed_precision=config.mixed_precision,
+    #         gradient_accumulation_plugin=grad_accumulation_plugin,
+    #         cpu=(config.device == 'cpu'))
 
     dataloader, node_dims, edge_dims = prepare_dataloader(config)
     student_model = create_model(node_dims, edge_dims, config.hidden_dims, config)
@@ -178,9 +178,9 @@ def training_loop(config: Namespace, debug_mode=False):
 #         T_0=config.lr_warmup_steps)
         # last_epoch=config.num_train_epochs*len(train_dataloader))
 
-    if accelerator:
-        student_model, optimizer, dataloader, scheduler \
-            = accelerator.prepare(student_model, optimizer, dataloader, scheduler)
+    # if accelerator:
+    #     student_model, optimizer, dataloader, scheduler \
+    #         = accelerator.prepare(student_model, optimizer, dataloader, scheduler)
 
     wandb_run = None
     if not debug_mode:
@@ -263,12 +263,12 @@ def training_loop(config: Namespace, debug_mode=False):
                 node_embedding_t2)
 
             # accelerator.print(f"Loss: {loss.item()}")
-            if accelerator:
-                accelerator.backward(loss)
-                accelerator.clip_grad_norm_(student_model.parameters(), 1.0)
-            else:
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(student_model.parameters(), 1.0)
+            # if accelerator:
+            #     accelerator.backward(loss)
+            #     accelerator.clip_grad_norm_(student_model.parameters(), 1.0)
+            # else:
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(student_model.parameters(), 1.0)
 
             epoch_loss += loss.item()
 
