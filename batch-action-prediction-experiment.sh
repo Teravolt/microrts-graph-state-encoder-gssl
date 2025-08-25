@@ -4,7 +4,7 @@ set -x
 
 # Baselines + DINO
 
-# for i in 6 7 8 9 10; do
+# for i in 1 2 3 4 5 6 7 8 9 10; do
 
 #     echo "Running seed $i"
 
@@ -63,12 +63,12 @@ for i in 1 2 3 4 5 6 7 8 9 10; do
     echo "Running seed $i"
 
     ## Linear Probe
-    python train_action_prediction_v2.py ../microrts-dataset/COG2019-competition/microrts-cog-2019-dataset-last-2-iteration --read_from_zip --max_replay_length 64 --device cpu --batch_size 16 --num_train_epochs 10 --frame_skip_freq 10 --frame_number_start 200 --save_model action-predictor-linear-probe-v2-encoder-centering-seed-$i.pt --run_name action-predictor-linear-probe-v2-encoder-centering-seed-$i --state_model gnn-state-model-v2-with-centering.pt --seed $i
+    python train_action_prediction_v2.py ../microrts-dataset/COG2019-competition/microrts-cog-2019-dataset-last-2-iteration --read_from_zip --max_replay_length 64 --device cpu --batch_size 16 --num_train_epochs 10 --frame_skip_freq 10 --frame_number_start 200 --save_model action-predictor-linear-probe-v2-encoder-centering-seed-$i.pt --run_name action-predictor-linear-probe-v2-encoder-centering-seed-$i --state_model gnn-state-model-v2-centering.pt --seed $i
 
     python eval_action_prediction_v2.py ../microrts-dataset/microrts-cog-2020-standard-last-two-iterations action-predictor-linear-probe-v2-encoder-centering-seed-$i.pt --read_from_zip --max_replay_length 64 --device cpu --frame_skip_freq 10 --frame_number_start 200 --run_name eval-linear-probe-v2-encoder-centering-seed-$i --seed $i
 
     ## Fine-Tune
-    python train_action_prediction_v2.py ../microrts-dataset/COG2019-competition/microrts-cog-2019-dataset-last-2-iteration --read_from_zip --max_replay_length 64 --device cpu --batch_size 16 --num_train_epochs 10 --frame_skip_freq 10 --frame_number_start 200 --save_model action-predictor-fine-tune-v2-encoder-centering-seed-$i.pt --run_name action-predictor-fine-tune-v2-encoder-centering-seed-$i --state_model gnn-state-model-v2-with-centering.pt --fine_tune --seed $i
+    python train_action_prediction_v2.py ../microrts-dataset/COG2019-competition/microrts-cog-2019-dataset-last-2-iteration --read_from_zip --max_replay_length 64 --device cpu --batch_size 16 --num_train_epochs 10 --frame_skip_freq 10 --frame_number_start 200 --save_model action-predictor-fine-tune-v2-encoder-centering-seed-$i.pt --run_name action-predictor-fine-tune-v2-encoder-centering-seed-$i --state_model gnn-state-model-v2-centering.pt --fine_tune --seed $i
 
     python eval_action_prediction_v2.py ../microrts-dataset/microrts-cog-2020-standard-last-two-iterations action-predictor-fine-tune-v2-encoder-centering-seed-$i.pt --read_from_zip --max_replay_length 64 --device cpu --frame_skip_freq 10 --frame_number_start 200 --run_name eval-fine-tune-v2-encoder-centering-seed-$i --seed $i
 
