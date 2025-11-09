@@ -1,7 +1,7 @@
 [tool.poetry]
-name = "microrts-analyzer"
+name = "microrts-graph-state-encoder-gssl"
 version = "0.1.0"
-description = "MicroRTS Analyzer"
+description = "MicroRTS Graph State Encoder"
 authors = ["Pavan Kantharaju <pavank92@gmail.com>"]
 readme = "README.md"
 

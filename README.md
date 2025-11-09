@@ -1,67 +1,58 @@
-# Microrts Analyzer
+# Code Repository for Paper "Pretraining Graph State Encoders for microRTS using Graph Self-Supervised Learning"
 
-Python code to analyze replay data generated from the Real-Time Strategy AI testbed MicroRTS.
+This repository contain Python scripts and Jupyter notebooks to (1) pretrain the graph state encoder used in the paper, and (2) run the cluster analysis and action prediction experiments contained in the paper.
 
-## Requirements
+## Installation
 
-Please note that the analyzer has been tested on MacOS.
-I believe this will work on Linux, but I am not 100% sure.
-Below lists all Python packages for setting up the analyzer.
-You will need `Python 3.9`+ to use the analyzer.
+You will need Python 3.9+ to run the scripts and notebooks.
 
-- `numpy` (can be installed via `pip install numpy`)
-- `pandas` (can be installed via `pip install pandas`)
-- `seaborn` (can be installed via `pip install seaborn`)
-- `tqdm` (can be installed via `pip install tqdm`)
-- `torch` (can be installed via `pip install torch`)
-- `torchvision` (can be installed via `pip install torchvision`)
-- `gradio` (can be installed via `pip install gradio`)
-- `jupyterlab` (can be installed via `pip install jupyterlab`)
-- `pylint` (Can be installved via `pip install pylint`) - This does not need to be installed unless you are contributing to the project.
-
-## Environment Setup
-
-We use `poetry` to set up our Python environment as it provides an easy and quick way to setup, update, and tear down python virtual environments.
+We use Poetry to set up our Python environment as it provides an easy and quick way to setup, update, and tear down python virtual environments.
 Please see the [Poetry Documentation](https://python-poetry.org/) for instructions on how to both install it on your preferred OS and use it.
 
-If you prefer to use other methods to set up an environment, please make sure that the Python packages and version in the "Requirements" section are installed!
+If you prefer to use other methods to set up a Python environment, please make sure that the Python packages and version from `pyproject.toml` are installed.
+There is also a `requirements.txt` generated from `pyproject.toml` to help with installation outside of Poetry.
 
-## Example Usage
+> Please note that this code was run on MacOS with Python 3.11.10.
+This should work on Linux and other Python versions, but I am not 100% sure.
+If you have any issues running this on other operating systems or other Python versions, let me know and I'll take a look!
 
-To run the analyzer, you can run the following:
+## Training a Graph State Encoder
+
+To pretrain a graph state encoder using Distillation with No Labels (DINO), you can run the script ` train_state_encoder_dino_v2_with_centering.py`.
+The exact arguments we used in the paper are as follows:
+```bash
+python train_state_encoder_dino_v2_with_centering.py ../microrts-dataset/microrts-cog-2019-standard --read_from_zip --max_replay_length 64 --save_model gnn-state-model-v2-centering.pt --device cpu --batch_size 16 --num_train_epochs 10 --frame_skip_freq 10 --frame_number_start 200 --run_name pre-training-v2-encoder-centering
 ```
-python main.py *input-directory*
+
+To pretrain a model using Graph Barlow Twins (GBT), you can run the script `train_state_encoder_barlow_twins_v2.py`.
+The exact arguments we used in the paper are as follows:
+```bash
+python train_state_encoder_barlow_twins_v2.py ../microrts-dataset/microrts-cog-2019-standard --read_from_zip --max_replay_length 64 --save_model gnn-state-model-v2-barlow-twins.pt --device cpu --batch_size 16 --num_train_epochs 10 --frame_skip_freq 10 --frame_number_start 200 --run_name pre-training-v2-encoder-barlow-twins
 ```
 
-To see all command line arguments, you can run the following:
+To pretrain a model using Bootstraped Graph Latents (BGRL), you can run the script `train_state_encoder_bgrl_v2.py`.
+The exact arguments we used in the paper are as follows:
+```bash
+python train_state_encoder_bgrl_v2.py ../microrts-dataset/microrts-cog-2019-standard --read_from_zip --max_replay_length 64 --save_model gnn-state-model-v2-bgrl.pt --device cpu --batch_size 16 --num_train_epochs 10 --frame_skip_freq 10 --frame_number_start 200 --run_name pre-training-v2-encoder-bgrl
 ```
-python main.py --help
+
+The pretraining runs, exact parameters used in the paper, and pretrained models can be found in our Weights and Biases project: https://wandb.ai/pkthunder/microrts-graph-state-ssl?nw=nwuserpkthunder
+
+## Action Prediction
+
+To train an action prediction model using DINO, you can run the script `train_action_prediction_v2.py`.
+The prediction runs, exact parameters used in the paper, and models can be found in our Weights and Biases project: https://wandb.ai/pkthunder/microrts-action-prediction?nw=nwuserpkthunder
+
+
+Below is an example on fine-tuning an action prediction model using a graph state encoder pretrained by DINO:
+```bash
+python train_action_prediction_v2.py ../microrts-dataset/COG2019-competition/microrts-cog-2019-dataset-last-2-iteration --read_from_zip --max_replay_length 64 --device cpu --batch_size 16 --num_train_epochs 10 --frame_skip_freq 10 --frame_number_start 200 --save_model action-predictor-fine-tune-v2-encoder-centering-seed-10.pt --run_name action-predictor-fine-tune-v2-encoder-centering-seed-10 --state_model gnn-state-model-v2-centering.pt --fine_tune --seed 10
 ```
 
-## Current limitations
-
-- The replay parser only works over XML files. I am in the process of getting the parser to work over JSON replays.
-- The replay parser only works on XML files with the above file structure. I will fix this to handle any file structure.
-- The replay parser currently supports 2 player replays. I am in the process of getting the parser to work with 3+ player replays.
-
-## Contributing 
-
-There are many things I still have not done for the replay analyzer (Look at TODO for potential ideas). 
-
-To contribute to the project: 
-1. Fork the project
-2. Create a feature branch 
-3. Commit your changes
-4. Push to the branch
-5. Create a new pull request
-
-## Versioning
-
-Semantic Versioning (MAJOR.MINOR.PATCH)
-
-## Authors
-
-Pavan Kantharaju - Initial Work
+Once the prediction model is trained, you can then evaluate it as follows:
+```bash
+python eval_action_prediction_v2.py ../microrts-dataset/microrts-cog-2020-standard-last-two-iterations action-predictor-fine-tune-v2-encoder-centering-seed-10.pt --read_from_zip --max_replay_length 64 --device cpu --frame_skip_freq 10 --frame_number_start 200 --run_name eval-fine-tune-v2-encoder-centering-seed-10 --seed 10
+```
 
 ## License
 
