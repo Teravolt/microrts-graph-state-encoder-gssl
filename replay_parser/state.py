@@ -28,39 +28,6 @@ PLAYER_TO_COLOR = {
     "enemy": (255, 0, 0, 1.0)
     }
 
-UNIT_TYPE_TO_ID = {
-    "worker": 2,
-    "base": 3,
-    "barracks": 4,
-    "heavy": 5,
-    "light": 6,
-    "ranged": 7,
-    "resource": 8
-}
-ID_TO_UNIT_TYPE = {
-    0: "empty",
-    1: "wall",
-    2: "worker",
-    3: "base",
-    4: "barracks",
-    5: "heavy",
-    6: "light",
-    7: "ranged",
-    8: "resource"
-}
-
-UNIT_TYPE_ID_TO_CHARACTER = {
-    'empty': '-',
-    'wall': "|",
-    "worker": 'W',
-    "base": '@',
-    "barracks": '#',
-    "heavy": 'H',
-    "light": 'L',
-    "ranged": 'R',
-    "resource": '$'
-}
-
 NUM_PLAYER_FEATURES = 14
 NUM_GAME_FEATURES = 2
 NUM_STATE_FEATURES = NUM_PLAYER_FEATURES + NUM_GAME_FEATURES
